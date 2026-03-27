@@ -77,6 +77,16 @@ function clearError() {
 /**
  * Initialize the Square Payments instance (once per page load).
  *
+ * Square.payments() accepts an optional third argument { env } but the
+ * recommended approach is to load the correct CDN script per environment
+ * (handled in Assets.php). The application_id prefix also encodes the
+ * environment — sandbox IDs start with 'sandbox-'.
+ *
+ * We perform an explicit guard here as a belt-and-braces check: if the
+ * application_id prefix does not match the is_sandbox flag coming from PHP,
+ * we throw a clear error before Square does — preventing the cryptic SDK
+ * mismatch message.
+ *
  * @return {Promise<any>}  Square Payments instance.
  */
 async function getOrInitPayments() {
@@ -92,6 +102,23 @@ async function getOrInitPayments() {
 
 	if ( ! config.application_id || ! config.location_id ) {
 		throw new Error( __( 'Square is not configured. Please contact the site administrator.', 'storeengine-square' ) );
+	}
+
+	// ── Environment / application_id mismatch guard ───────────────────────────
+	// Square application IDs starting with 'sandbox-' are sandbox-only.
+	// Catch the mismatch early with a meaningful developer-facing error.
+	const appIdIsSandbox = config.application_id.startsWith( 'sandbox-' );
+
+	if ( config.is_sandbox && ! appIdIsSandbox ) {
+		throw new Error(
+			__( 'Square configuration error: is_sandbox is true but the Application ID does not start with "sandbox-". Check your gateway settings.', 'storeengine-square' )
+		);
+	}
+
+	if ( ! config.is_sandbox && appIdIsSandbox ) {
+		throw new Error(
+			__( 'Square configuration error: Live Mode is enabled but a sandbox Application ID is configured. Update your Application ID to a production key.', 'storeengine-square' )
+		);
 	}
 
 	const payments = window.Square.payments( config.application_id, config.location_id );

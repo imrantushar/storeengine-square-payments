@@ -73,7 +73,7 @@ final class StoreEngineSquarePayments {
 			return; // Admin notice already scheduled inside load_composer().
 		}
 
-		add_action( 'storeengine_loaded', [ $this, 'init' ] );
+		add_action( 'storeengine_init', [ $this, 'init' ] );
 		add_action( 'init', [ $this, 'load_textdomain' ] );
 	}
 

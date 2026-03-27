@@ -12,7 +12,7 @@ class Assets {
 
 	public static function init( GatewaySquare $gateway ): void {
 		self::$gateway = $gateway;
-		add_action( 'storeengine/enqueue_frontend_scripts', [ __CLASS__, 'enqueue_frontend' ] );
+		add_action( 'storeengine/assets/after_frontend_scripts', [ __CLASS__, 'enqueue_frontend' ] );
 	}
 
 	public static function enqueue_frontend(): void {
@@ -24,23 +24,30 @@ class Assets {
 			return;
 		}
 
+		// Two separate CDN URLs — Square requires the matching one for your environment
+		$SDK_URL_PRODUCTION = 'https://web.squarecdn.com/v1/square.js';
+		$SDK_URL_SANDBOX    = 'https://sandbox.web.squarecdn.com/v1/square.js';
+
+		$is_production = (bool) self::$gateway->get_option( 'is_production', false );
+		$sdk_url       = $is_production ? $SDK_URL_PRODUCTION : $SDK_URL_SANDBOX;
+
+
 		// Official Square Web Payments SDK CDN.
 		wp_enqueue_script(
 			'square-web-payments-sdk',
-			'https://web.squarecdn.com/v1/square.js',
+			$sdk_url,
 			[],
 			null, // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.NoExplicitVersion
 			true
 		);
 
-		if ( file_exists( SE_SQUARE_DIR . 'assets/js/square-checkout.js' ) ) {
-			wp_enqueue_script(
-				'storeengine-square-checkout',
-				SE_SQUARE_URL . 'assets/js/square-checkout.js',
-				[ 'storeengine-frontend', 'square-web-payments-sdk' ],
-				SE_SQUARE_VERSION,
-				true
-			);
-		}
+		$dependencies = include_once SE_SQUARE_DIR . 'assets/build/payments.asset.php';
+		wp_enqueue_script(
+			'storeengine-square-checkout',
+			SE_SQUARE_URL . 'assets/build/payments.js',
+			[],
+			$dependencies['version'],
+			true
+		);
 	}
 }
