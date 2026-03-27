@@ -1,0 +1,22 @@
+{
+    "name": "kodezen/storeengine-square",
+    "description": "Square Payment Gateway for StoreEngine",
+    "type": "wordpress-plugin",
+    "license": "GPL-3.0-or-later",
+    "require": {
+        "php": "^8.1",
+        "square/square": "^43.0"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "vendor-dir": "vendor"
+    },
+    "autoload": {
+        "psr-4": {
+            "StoreEngineSquare\\": "src/"
+        }
+    },
+    "extra": {
+        "notes": "Run: composer install --no-dev -o  The vendor/ folder must be committed to the plugin ZIP."
+    }
+}
