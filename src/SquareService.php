@@ -27,9 +27,9 @@
  *   $client->refunds    RefundsClient   (refundPayment, getPaymentRefund)
  *   $client->customers  CustomersClient (create, retrieve, search, update, delete)
  *   $client->cards      CardsClient     (create, retrieve, disable, list)
- *   $client->locations  LocationsClient (list, retrieveLocation)
+ *   $client->locations  LocationsClient (get, list, create, update)
  *
- * @package StoreEngineSquare\Square
+ * @package StoreEngineSquare
  */
 
 namespace StoreEngineSquare;
@@ -37,6 +37,7 @@ namespace StoreEngineSquare;
 use Square\Cards\Requests\CreateCardRequest;
 use Square\Customers\Requests\CreateCustomerRequest;
 use Square\Exceptions\SquareException;
+use Square\Locations\Requests\GetLocationsRequest;
 use Square\Payments\Requests\CreatePaymentRequest;
 use Square\Refunds\Requests\RefundPaymentRequest;
 use Square\SquareClient;
@@ -45,7 +46,6 @@ use Square\Types\Address;
 use Square\Types\Card;
 use Square\Types\Money;
 use Square\Types\Payment;
-use Square\Locations\Requests\GetLocationsRequest;
 use StoreEngine\Classes\Exceptions\StoreEngineException;
 use StoreEngine\Classes\Order;
 use StoreEngine\Payment_Gateways;
@@ -183,8 +183,16 @@ final class SquareService {
 	): Payment {
 		$this->assert_client();
 
-		$request = new CreatePaymentRequest( [
-			// Required fields.
+		// Square's CreatePayment API does NOT have a "store card on file" flag —
+		// the field setStorePaymentMethodInVault() does not exist.
+		// Saving the card is a separate Cards::create() call after the payment
+		// succeeds, using the payment ID as the sourceId (Square accepts a
+		// completed payment ID in place of a nonce to create a card-on-file).
+		//
+		// We pass customerId here so Square links the charge to the customer record
+		// (required when later charging that customer's card on file).
+		$args = [
+			// Required.
 			'idempotencyKey' => $idempotency_key,
 			'sourceId'       => $source_id,
 			'amountMoney'    => new Money( [
@@ -194,7 +202,7 @@ final class SquareService {
 				),
 				'currency' => strtoupper( $order->get_currency() ),
 			] ),
-			// Recommended fields.
+			// Recommended.
 			'autocomplete'      => true,
 			'locationId'        => $this->location_id,
 			'referenceId'       => (string) $order->get_id(),
@@ -206,18 +214,52 @@ final class SquareService {
 				get_bloginfo( 'name' ),
 				$order->get_id()
 			),
-		] );
+		];
 
-		// Optionally save the card on-file after successful charge.
-		if ( $save_card && $customer_id ) {
-			$request->setCustomerId( $customer_id );
-			$request->setStorePaymentMethodInVault( 'ON_SUCCESS' );
+		if ( $customer_id ) {
+			$args['customerId'] = $customer_id;
 		}
 
 		try {
-			return $this->client->payments->create( request: $request )->getPayment();
+			return $this->client->payments->create(
+				request: new CreatePaymentRequest( $args )
+			)->getPayment();
 		} catch ( SquareException $e ) {
 			throw $this->convert_exception( $e, 'square-create-payment-failed' );
+		}
+	}
+
+	/**
+	 * Save a card-on-file from a completed payment.
+	 *
+	 * Called by GatewaySquare::process_payment() after a successful charge when
+	 * the customer opted to save their card. Square accepts a completed payment ID
+	 * as the sourceId for card creation — no separate nonce needed.
+	 *
+	 * Returns null silently on failure so that a card-save error never rolls back
+	 * an otherwise successful payment.
+	 *
+	 * @param string $customer_id  Square Customer ID.
+	 * @param string $payment_id   Square Payment ID from a completed charge.
+	 *
+	 * @return Card|null  The saved Card object, or null if saving failed.
+	 */
+	public function save_card_from_payment( string $customer_id, string $payment_id ): ?Card {
+		if ( ! $customer_id || ! $payment_id ) {
+			return null;
+		}
+
+		try {
+			$idem_key = $this->generate_idempotency_key( 'card_from_payment_' . $payment_id );
+
+			return $this->create_card( $customer_id, $payment_id, $idem_key );
+		} catch ( StoreEngineException $e ) {
+			// Card save failed — log but do NOT propagate.
+			// The charge succeeded; the inability to save the card should
+			// not appear as a payment failure to the customer.
+			Helper::log_error( $e );
+
+			return null;
 		}
 	}
 

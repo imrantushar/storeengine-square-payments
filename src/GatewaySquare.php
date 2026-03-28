@@ -8,14 +8,18 @@
  * All Square API calls are delegated to SquareService, which uses the official
  * square/square Composer SDK.
  *
- * @package StoreEngineSquare\Gateway
+ * @package StoreEngineSquare
  */
 
 namespace StoreEngineSquare;
 
 use Square\Types\Card;
 use Square\Types\Payment;
+use StoreEngine\Addons\Subscription\Classes\SubscriptionCollection;
 use StoreEngine\Classes\Exceptions\StoreEngineException;
+use StoreEngine\Classes\Exceptions\StoreEngineInvalidOrderStatusException;
+use StoreEngine\Classes\Exceptions\StoreEngineInvalidOrderStatusTransitionException;
+use StoreEngine\Classes\OrderStatus\Completed;
 use StoreEngine\Classes\Order;
 use StoreEngine\Classes\OrderContext;
 use StoreEngine\Classes\OrderStatus\OrderStatus;
@@ -46,6 +50,10 @@ class GatewaySquare extends PaymentGateway {
 		$this->title       = $this->get_option( 'title' );
 		$this->description = $this->get_option( 'description' );
 		$this->saved_cards = (bool) $this->get_option( 'saved_cards', false );
+
+		// StoreEngine's subscription scheduler fires this action for every renewal
+		// and installment — our handler charges the saved card off-session.
+		add_action( 'storeengine/subscription/scheduled_payment_' . $this->id, [ $this, 'process_scheduled_payment' ] );
 	}
 
 	// ── Setup ─────────────────────────────────────────────────────────────────
@@ -63,8 +71,24 @@ class GatewaySquare extends PaymentGateway {
 		$this->supports           = [
 			'products',
 			'refunds',
+			// Saved cards.
 			'tokenization',
 			'add_payment_method',
+			// Subscriptions & installments — StoreEngine scheduler drives billing,
+			// Square card-on-file handles the off-session charge each renewal.
+			'subscriptions',
+			'multiple_subscriptions',
+			'subscription_cancellation',
+			'subscription_reactivation',
+			'subscription_suspension',
+			'subscription_amount_changes',
+			'subscription_date_changes',
+			'subscriptions_automatic_payments',
+			'subscription_payment_method_change_admin',
+			'subscription_payment_method_change_customer',
+			'subscription_payment_method_change',
+			// Installments follow the same renewal flow as subscriptions.
+			'gateway_scheduled_payments',
 		];
 	}
 
@@ -284,7 +308,10 @@ class GatewaySquare extends PaymentGateway {
 		</fieldset>
 		<?php
 		if ( $display_tokenization ) {
-			$this->save_payment_method_checkbox( Helper::is_add_payment_method_page() );
+			// Force the save checkbox when the cart contains a subscription or
+			// installment — the customer must save their card so renewals can
+			// be charged automatically without browser interaction.
+			$this->save_payment_method_checkbox( $this->should_force_save_payment() );
 		}
 		ob_end_flush();
 	}
@@ -333,6 +360,13 @@ class GatewaySquare extends PaymentGateway {
 		$save_card      = (bool) $this->maybe_user_request_saved_payment_method();
 		// phpcs:enable WordPress.Security.NonceVerification.Missing
 
+		// Subscriptions and installments MUST save the card so that StoreEngine's
+		// scheduler can charge it off-session on every renewal.
+		$has_subscription = Helper::cart() && Helper::cart()->get_meta( 'has_subscription' );
+		if ( $has_subscription || $this->should_force_save_payment() ) {
+			$save_card = true;
+		}
+
 		try {
 			// ── Path A: Saved card-on-file ─────────────────────────────────────
 			if ( $selected_token && 'new' !== $selected_token ) {
@@ -347,6 +381,17 @@ class GatewaySquare extends PaymentGateway {
 				}
 
 				$customer_id = (string) get_user_meta( get_current_user_id(), '_square_customer_id', true );
+
+				// If customer_id is missing (e.g. old order before this version),
+				// fall back to creating/retrieving from Square.
+				if ( ! $customer_id && is_user_logged_in() ) {
+					$customer_id = $service->get_or_create_customer(
+						get_current_user_id(),
+						$order->get_billing_email(),
+						trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() )
+					);
+				}
+
 				$idem_key    = $service->generate_idempotency_key( 'saved_' . $order->get_id() . '_' . $token->get_token() );
 
 				/** @var Payment $square_payment */
@@ -388,10 +433,7 @@ class GatewaySquare extends PaymentGateway {
 					$customer_id
 				);
 
-				// Store the card token if Square returned one.
-				if ( $save_card && is_user_logged_in() ) {
-					$this->maybe_save_token_from_payment( $square_payment, get_current_user_id() );
-				}
+				// Card saving happens below after payment_id is known.
 			}
 
 			// ── Payment status check ───────────────────────────────────────────
@@ -429,9 +471,48 @@ class GatewaySquare extends PaymentGateway {
 			$order->add_meta_data( '_square_card_last4',      $last4,       true );
 			$order->add_meta_data( '_square_processing_fee',  $fee_amount,  true );
 
+			// ── Save card on-file (correct Square flow) ──────────────────────────
+			// Square's CreatePayment API has NO "store card" flag — setStorePaymentMethodInVault()
+			// does not exist. The correct flow is a separate Cards::create() call using
+			// the completed payment ID as the sourceId (Square accepts this in place of a nonce).
+			$card_id = '';
+			if ( $save_card && is_user_logged_in() && $sq_customer ) {
+				$saved_card = $service->save_card_from_payment( $sq_customer, $payment_id );
+				if ( $saved_card ) {
+					$card_id   = (string) $saved_card->getId();
+					$card_data = [
+						'id'          => $saved_card->getId(),
+						'last_4'      => $saved_card->getLast4(),
+						'card_brand'  => $saved_card->getCardBrand(),
+						'exp_month'   => $saved_card->getExpMonth(),
+						'exp_year'    => $saved_card->getExpYear(),
+						'fingerprint' => $saved_card->getFingerprint(),
+					];
+					if ( ! SquarePaymentTokens::find_duplicate( $card_data, get_current_user_id(), $this->id ) ) {
+						$this->create_payment_token( get_current_user_id(), $card_data );
+					}
+				}
+			}
+
+			// Fallback: when using a saved token (Path A), the card_id comes from
+			// the token already. Populate from payment response as a secondary source.
+			if ( ! $card_id ) {
+				$card_id = (string) ( $square_payment->getCardDetails()?->getCard()?->getId() ?? '' );
+			}
+
+			// _square_source_id is read by process_scheduled_payment() for every
+			// subscription renewal / installment — must be a reusable ccof:… ID.
+			if ( $card_id ) {
+				$order->add_meta_data( '_square_source_id', $card_id, true );
+			}
+
 			if ( $sq_customer ) {
 				$order->add_meta_data( '_square_customer_id', $sq_customer, true );
 			}
+
+			// Copy customer ID + card ID onto the subscription record so renewal
+			// orders created by the scheduler inherit them automatically.
+			$this->maybe_update_source_on_subscription_order( $order, $sq_customer, $card_id );
 
 			$order_context->proceed_to_next_status( 'process_order', $order, [
 				'note' => sprintf(
@@ -653,32 +734,284 @@ class GatewaySquare extends PaymentGateway {
 		return $token;
 	}
 
+	// ── Subscription & installment support ───────────────────────────────────────
+
 	/**
-	 * Optionally extract and save a card token from a completed Payment object.
-	 * Called when the customer checked "Save card" on a new-card checkout.
+	 * Determine whether to force the "save payment method" checkbox on.
 	 *
-	 * @param Payment $payment
-	 * @param int     $user_id
+	 * Returns true when:
+	 *   - We are on the "Add Payment Method" page (always save)
+	 *   - The cart contains a subscription or installment plan
+	 *
+	 * When forced, the checkbox is pre-checked and the customer cannot uncheck it —
+	 * a saved card is required for automatic renewals.
+	 *
+	 * @return bool
 	 */
-	private function maybe_save_token_from_payment( Payment $payment, int $user_id ): void {
-		$card = $payment->getCardDetails()?->getCard();
-		if ( ! $card || ! $card->getId() ) {
+	private function should_force_save_payment(): bool {
+		if ( Helper::is_add_payment_method_page() ) {
+			return true;
+		}
+
+		return (bool) apply_filters(
+			'storeengine/square/force_save_payment_method',
+			Helper::cart() && Helper::cart()->get_meta( 'has_subscription' )
+		);
+	}
+
+	/**
+	 * Copy Square customer ID and card (source) ID onto all subscriptions linked
+	 * to the given order.
+	 *
+	 * Called after every successful payment so that the subscription record always
+	 * holds the latest card details — renewal orders inherit them in
+	 * process_scheduled_payment().
+	 *
+	 * Mirrors GatewayStripe::maybe_update_source_on_subscription_order().
+	 *
+	 * @param Order  $order       The parent or renewal order.
+	 * @param string $customer_id Square Customer ID.
+	 * @param string $card_id     Square Card ID (e.g. ccof:…).
+	 *
+	 * @return void
+	 */
+	private function maybe_update_source_on_subscription_order( Order $order, string $customer_id, string $card_id ): void {
+		if ( ! Helper::get_addon_active_status( 'subscription' ) || ( ! $customer_id && ! $card_id ) ) {
 			return;
 		}
 
-		$card_data = [
-			'id'          => $card->getId(),
-			'last_4'      => $card->getLast4(),
-			'card_brand'  => $card->getCardBrand(),
-			'exp_month'   => $card->getExpMonth(),
-			'exp_year'    => $card->getExpYear(),
-			'fingerprint' => $card->getFingerprint(),
-		];
+		if ( SubscriptionCollection::order_contains_subscription( $order->get_id() ) ) {
+			$subscriptions = SubscriptionCollection::get_subscriptions_for_order( $order->get_id() );
+		} elseif ( SubscriptionCollection::order_contains_subscription( $order->get_id(), [ 'renewal' ] ) ) {
+			$subscriptions = SubscriptionCollection::get_subscriptions_for_renewal_order( $order->get_id() );
+		} else {
+			return;
+		}
 
-		if ( ! SquarePaymentTokens::find_duplicate( $card_data, $user_id, $this->id ) ) {
-			$this->create_payment_token( $user_id, $card_data );
+		foreach ( $subscriptions as $subscription ) {
+			if ( $customer_id ) {
+				$subscription->update_meta_data( '_square_customer_id', $customer_id );
+			}
+
+			if ( $card_id ) {
+				$subscription->update_meta_data( '_square_source_id', $card_id );
+			}
+
+			$subscription->set_payment_method( $this->id );
+			$subscription->save();
 		}
 	}
+
+	/**
+	 * Process a scheduled subscription renewal or installment payment.
+	 *
+	 * StoreEngine's SubscriptionScheduler fires:
+	 *   do_action( 'storeengine/subscription/scheduled_payment_square', $renewal_order )
+	 *
+	 * Flow:
+	 *   1. Read _square_customer_id + _square_source_id from the renewal order meta
+	 *      (copied from the subscription record, which was set by the initial payment).
+	 *   2. Charge the saved card off-session via SquareService.
+	 *   3. On success — complete the renewal order and update subscription status.
+	 *   4. On failure — mark the renewal order as failed and put the subscription
+	 *      on-hold so the customer is notified and can update their card.
+	 *
+	 * @param Order $renewal_order  Renewal order created by the scheduler.
+	 *
+	 * @return void
+	 * @throws StoreEngineException
+	 * @throws StoreEngineInvalidOrderStatusException
+	 * @throws StoreEngineInvalidOrderStatusTransitionException
+	 */
+	public function process_scheduled_payment( Order $renewal_order ): void {
+		$order_context = new OrderContext( $renewal_order->get_status() );
+		$service       = SquareService::init( $this );
+
+		try {
+			// ── Zero-amount renewal (trial, coupon, etc.) ─────────────────────
+			if ( ! (float) $renewal_order->get_total() ) {
+				$renewal_order->set_paid_status( 'paid' );
+				$order_context->proceed_to_next_status(
+					Completed::STATUS,
+					$renewal_order,
+					_x( 'Payment not needed.', 'Square scheduled payment', 'storeengine-square' )
+				);
+				$renewal_order->save();
+
+				return;
+			}
+
+			// ── Retrieve card details stored on the subscription ───────────────
+			//
+			// The subscription record holds _square_customer_id and _square_source_id
+			// because maybe_update_source_on_subscription_order() wrote them there
+			// after the initial (or most recent) checkout payment.
+			// The renewal order inherits them from the subscription via Renewal::create_new_order().
+			$customer_id = (string) $renewal_order->get_meta( '_square_customer_id', true, 'edit' );
+			$card_id     = (string) $renewal_order->get_meta( '_square_source_id',   true, 'edit' );
+
+			// Fallback: check user meta if renewal order meta is empty
+			// (handles orders created before this version of the plugin).
+			if ( ! $customer_id && $renewal_order->get_customer_id() ) {
+				$customer_id = (string) get_user_meta( $renewal_order->get_customer_id(), '_square_customer_id', true );
+			}
+
+			if ( ! $customer_id || ! $card_id ) {
+				throw new StoreEngineException(
+					esc_html__( 'Square renewal failed: no saved payment method found for this subscription. The customer needs to update their payment method.', 'storeengine-square' ),
+					'square-renewal-no-saved-card',
+					[
+						'renewal_order_id' => $renewal_order->get_id(),
+						'customer_id'      => $customer_id,
+						'card_id'          => $card_id,
+					],
+					400
+				);
+			}
+
+			// ── Charge the saved card ─────────────────────────────────────────
+			$idem_key = $service->generate_idempotency_key(
+				'renewal_' . $renewal_order->get_id() . '_' . $card_id
+			);
+
+			/** @var \Square\Types\Payment $square_payment */
+			$square_payment = $service->create_payment_with_saved_card(
+				$renewal_order,
+				$card_id,
+				$customer_id,
+				$idem_key
+			);
+
+			$status = $square_payment->getStatus() ?? '';
+
+			if ( 'COMPLETED' !== $status ) {
+				throw new StoreEngineException(
+					sprintf(
+						/* translators: %s: Square payment status */
+						esc_html__( 'Square renewal charge returned unexpected status: %s', 'storeengine-square' ),
+						esc_html( $status )
+					),
+					'square-renewal-unexpected-status',
+					[ 'status' => $status, 'renewal_order_id' => $renewal_order->get_id() ],
+					400
+				);
+			}
+
+			// ── Record the result on the renewal order ────────────────────────
+			$payment_id  = (string) $square_payment->getId();
+			$receipt_url = (string) $square_payment->getReceiptUrl();
+			$card_brand  = (string) ( $square_payment->getCardDetails()?->getCard()?->getCardBrand() ?? '' );
+			$last4       = (string) ( $square_payment->getCardDetails()?->getCard()?->getLast4() ?? '' );
+			$fee_amount  = (int) ( $square_payment->getProcessingFee()[0]?->getAmountMoney()?->getAmount() ?? 0 );
+
+			$renewal_order->set_transaction_id( $payment_id );
+			$renewal_order->set_paid_status( 'paid' );
+			$renewal_order->add_meta_data( '_square_payment_id',     $payment_id,  true );
+			$renewal_order->add_meta_data( '_square_receipt_url',    $receipt_url, true );
+			$renewal_order->add_meta_data( '_square_card_brand',     $card_brand,  true );
+			$renewal_order->add_meta_data( '_square_card_last4',     $last4,       true );
+			$renewal_order->add_meta_data( '_square_processing_fee', $fee_amount,  true );
+			$renewal_order->add_meta_data( '_square_customer_id',    $customer_id, true );
+			$renewal_order->add_meta_data( '_square_source_id',      $card_id,     true );
+
+			// Keep subscription's card meta up-to-date.
+			$this->maybe_update_source_on_subscription_order( $renewal_order, $customer_id, $card_id );
+
+			$order_context->proceed_to_next_status(
+				Completed::STATUS,
+				$renewal_order,
+				[
+					'note' => sprintf(
+						/* translators: 1: payment ID 2: card brand 3: last 4 digits */
+						__( 'Square renewal payment complete. Payment ID: %1$s. Card: %2$s ending %3$s.', 'storeengine-square' ),
+						$payment_id,
+						$card_brand,
+						$last4
+					),
+					'transaction_id' => $payment_id,
+				]
+			);
+
+			$renewal_order->save();
+
+			/**
+			 * Fires after a successful Square scheduled renewal / installment payment.
+			 *
+			 * @param \Square\Types\Payment $square_payment
+			 * @param Order                  $renewal_order
+			 */
+			do_action( 'storeengine/square/after_renewal_payment', $square_payment, $renewal_order );
+
+		} catch ( StoreEngineException $e ) {
+			Helper::log_error( $e );
+
+			$renewal_order->update_status(
+				OrderStatus::PAYMENT_FAILED,
+				sprintf(
+					/* translators: %s: error message */
+					__( 'Square renewal payment failed. Error: %s', 'storeengine-square' ),
+					$e->getMessage()
+				)
+			);
+
+			// Put the subscription on-hold so further renewals are paused and
+			// the customer is notified to update their payment method.
+			$this->maybe_put_subscription_on_hold( $renewal_order, $e->getMessage() );
+
+		} catch ( \Throwable $e ) {
+			Helper::log_error( $e );
+
+			$renewal_order->update_status(
+				OrderStatus::PAYMENT_FAILED,
+				sprintf(
+					/* translators: %s: error message */
+					__( 'Square renewal payment failed. Error: %s', 'storeengine-square' ),
+					$e->getMessage()
+				)
+			);
+
+			$this->maybe_put_subscription_on_hold( $renewal_order, $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Put the subscription linked to a failed renewal order on-hold.
+	 *
+	 * Called when process_scheduled_payment() catches an exception.
+	 * Putting the subscription on-hold pauses future renewal attempts and
+	 * (if the email addon is active) triggers a "payment failed" notification
+	 * to the customer.
+	 *
+	 * @param Order  $renewal_order
+	 * @param string $reason  Human-readable failure reason for the order note.
+	 *
+	 * @return void
+	 */
+	private function maybe_put_subscription_on_hold( Order $renewal_order, string $reason ): void {
+		if ( ! Helper::get_addon_active_status( 'subscription' ) ) {
+			return;
+		}
+
+		try {
+			$subscriptions = SubscriptionCollection::get_subscriptions_for_renewal_order( $renewal_order->get_id() );
+
+			foreach ( $subscriptions as $subscription ) {
+				if ( $subscription->has_status( [ 'active', 'pending' ] ) ) {
+					$subscription->update_status(
+						'on_hold',
+						sprintf(
+							/* translators: %s: error message */
+							__( 'Subscription put on hold because automatic renewal payment failed. Reason: %s', 'storeengine-square' ),
+							$reason
+						)
+					);
+				}
+			}
+		} catch ( \Throwable $e ) {
+			Helper::log_error( $e );
+		}
+	}
+
 }
 
 // End of file GatewaySquare.php.

@@ -5,7 +5,7 @@
  * Extends StoreEngine's PaymentTokenCc with a fingerprint field used for
  * duplicate-detection when saving Square cards-on-file.
  *
- * @package StoreEngineSquare
+ * @package StoreEngineSquare\PaymentTokens
  */
 
 namespace StoreEngineSquare;
@@ -33,5 +33,3 @@ class SquarePaymentTokenCc extends PaymentTokenCc {
 		$this->set_prop( 'fingerprint', $fingerprint );
 	}
 }
-
-// End of file SquarePaymentTokenCc.php.
