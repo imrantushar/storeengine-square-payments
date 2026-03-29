@@ -4,38 +4,36 @@
  * Square gateway — uses the StoreEngine registerGateway() API
  * (the same system built for Stripe, PayPal, Razorpay, Paddle).
  *
- * FLOW
- * ────
+ * FLOW — new card
+ * ───────────────
  * 1. onSelected   → initialize Square Web Payments SDK + mount card widget
  * 2. processPayment → tokenize the card → POST nonce with place_order
- * 3. onCheckoutUpdated → nothing needed (Square amounts come from the server)
  *
- * PHP side already injects credentials via:
+ * FLOW — saved card
+ * ─────────────────
+ * StoreEngine's own tokenization UI (qr class) already handles show/hide of
+ * the card form when the customer selects a saved card vs "new card" radio.
+ * The gateway does NOT need to manage visibility — StoreEngine does it.
+ *
+ * 1. onSelected → mount card widget (StoreEngine hides it if saved card selected)
+ * 2. processPayment → if saved card radio selected: skip tokenization, POST
+ *    form data as-is (PHP reads token via get_selected_token_from_request()).
+ *    If new card: tokenize via Square SDK, POST nonce.
+ *
+ * PHP side injects credentials via:
  *   StoreEngineGlobal.payment_gateways.square = { application_id, location_id, is_sandbox }
  *
  * THIRD-PARTY EXTENSION
  * ─────────────────────
- * Other plugins can hook into the Square flow via WordPress hooks:
- *
- *   wp.hooks.addFilter(
- *     'storeengine.square.card_options',
- *     'my-plugin/square-ext',
- *     ( options ) => ({ ...options, postalCode: true })
- *   );
- *
- *   wp.hooks.addAction(
- *     'storeengine.square.after_tokenize',
- *     'my-plugin/square-ext',
- *     async ( token, verificationToken ) => { ... }
- *   );
+ *   wp.hooks.addFilter('storeengine.square.card_options', 'my-plugin', opts => opts);
+ *   wp.hooks.addAction('storeengine.square.after_tokenize', 'my-plugin', async (token) => {});
  */
 
-import { __, sprintf } from '@wordpress/i18n';
+import { __ } from '@wordpress/i18n';
 import { applyFilters, doAction, doActionAsync } from '@wordpress/hooks';
 import {
 	getSeGlobal,
 	renderErrorNotification,
-	StoreEngineDQ,
 } from '@Utils/helper';
 
 // ─── Module state ─────────────────────────────────────────────────────────────
@@ -43,70 +41,69 @@ import {
 /** @type {{ payments: any, card: any } | null} */
 let squareState = null;
 
-/** True after the card widget has been mounted at least once. */
-let isMounted = false;
+/**
+ * Mount promise — shared singleton across all concurrent callers.
+ *
+ * WHY THIS EXISTS
+ * ───────────────
+ * StoreEngine's CheckoutManager calls onSelected (→ mountCardWidget) multiple
+ * times in rapid succession on page load:
+ *   window.load → _updateCheckout() → _onPaymentMethodChanged() → onSelected
+ *   storeengine_cart_updated         → _onPaymentMethodChanged() → onSelected
+ *
+ * Square's card.attach() is async. A second call arriving while the first
+ * attach() is still in flight would pass any DOM-based guard (the iframe is
+ * not yet in the DOM) and call attach() again, producing two iframes.
+ *
+ * Storing the promise means every concurrent caller awaits the same operation.
+ * attach() runs exactly once regardless of how many times onSelected fires.
+ *
+ * @type {Promise<void>|null}
+ */
+let mountPromise = null;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getSquareConfig() {
-	return getSeGlobal( 'payment_gateways.square', {} );
-}
-
-function getErrorContainer() {
-	return document.getElementById( 'storeengine-square-card-errors' );
-}
-
-function showError( message ) {
-	const container = getErrorContainer();
-	if ( container ) {
-		container.textContent = message;
-		container.style.display = 'block';
-	}
-}
-
 function clearError() {
-	const container = getErrorContainer();
-	if ( container ) {
-		container.textContent = '';
-		container.style.display = 'none';
-	}
+	const el = document.getElementById( 'storeengine-square-card-errors' );
+	if ( el ) { el.textContent = ''; el.style.display = 'none'; }
 }
-
-// ─── Square Web Payments SDK initialization ───────────────────────────────────
 
 /**
- * Initialize the Square Payments instance (once per page load).
+ * Return the currently selected saved-token ID, or null for "new card".
  *
- * Square.payments() accepts an optional third argument { env } but the
- * recommended approach is to load the correct CDN script per environment
- * (handled in Assets.php). The application_id prefix also encodes the
- * environment — sandbox IDs start with 'sandbox-'.
+ * StoreEngine renders saved cards as radio inputs:
+ *   <input type="radio" name="storeengine-square-payment-token" value="{id}">
+ * The "new card" option has value="new".
  *
- * We perform an explicit guard here as a belt-and-braces check: if the
- * application_id prefix does not match the is_sandbox flag coming from PHP,
- * we throw a clear error before Square does — preventing the cryptic SDK
- * mismatch message.
- *
- * @return {Promise<any>}  Square Payments instance.
+ * When a saved card is selected, processPayment skips Square SDK tokenization
+ * and lets PHP handle it via get_selected_token_from_request() (Path A).
  */
-async function getOrInitPayments() {
-	if ( squareState?.payments ) {
-		return squareState.payments;
+function getSelectedSavedToken() {
+	const radio = document.querySelector(
+		'input[name="storeengine-square-payment-token"]:checked'
+	);
+	if ( ! radio || radio.value === 'new' || ! radio.value ) {
+		return null;
 	}
+	return radio.value;
+}
+
+// ─── Square SDK init ──────────────────────────────────────────────────────────
+
+async function getOrInitPayments() {
+	if ( squareState?.payments ) return squareState.payments;
 
 	if ( ! window.Square ) {
 		throw new Error( __( 'Square Web Payments SDK is not loaded.', 'storeengine-square' ) );
 	}
 
-	const config = getSquareConfig();
+	const config = getSeGlobal( 'payment_gateways.square', {} );
 
 	if ( ! config.application_id || ! config.location_id ) {
 		throw new Error( __( 'Square is not configured. Please contact the site administrator.', 'storeengine-square' ) );
 	}
 
-	// ── Environment / application_id mismatch guard ───────────────────────────
-	// Square application IDs starting with 'sandbox-' are sandbox-only.
-	// Catch the mismatch early with a meaningful developer-facing error.
 	const appIdIsSandbox = config.application_id.startsWith( 'sandbox-' );
 
 	if ( config.is_sandbox && ! appIdIsSandbox ) {
@@ -123,99 +120,76 @@ async function getOrInitPayments() {
 
 	const payments = window.Square.payments( config.application_id, config.location_id );
 	squareState    = { payments, card: null };
-
 	return payments;
 }
 
+// ─── Card widget ──────────────────────────────────────────────────────────────
+
 /**
- * Build the Card widget options.
- * Third-party plugins can modify options via the `storeengine.square.card_options` filter.
+ * Mount the Square card widget — guaranteed to call attach() exactly once.
  *
- * @return {Object}
- */
-function buildCardOptions() {
-	const defaults = {
-		style: {
-			'.input-container': { borderColor: '#ddd', borderRadius: '4px' },
-			'.input-container.is-focus': { borderColor: '#1a56db' },
-			'.input-container.is-error': { borderColor: '#dc2626' },
-		},
-	};
-
-	return applyFilters( 'storeengine.square.card_options', defaults );
-}
-
-/**
- * Create and mount the Square Card widget.
- * Safe to call multiple times — re-mounts if container is empty.
+ * Uses mountPromise as a singleton: the first call creates and stores the
+ * promise; every subsequent call (including concurrent ones) returns it.
+ * StoreEngine's tokenization UI controls visibility of the form container —
+ * we do not touch display/visibility here.
  *
  * @param {any} payments  Square Payments instance.
  * @return {Promise<void>}
  */
-async function mountCardWidget( payments ) {
-	const container = document.getElementById( 'storeengine-square-card-element' );
-	if ( ! container ) return;
+function mountCardWidget( payments ) {
+	if ( mountPromise ) return mountPromise;
 
-	// Already mounted and still has children — skip.
-	if ( isMounted && container.children.length > 0 ) return;
+	mountPromise = ( async () => {
+		const container = document.getElementById( 'storeengine-square-card-element' );
+		if ( ! container ) return;
 
-	const options = buildCardOptions();
+		const options = applyFilters( 'storeengine.square.card_options', {
+			style: {
+				'.input-container':          { borderColor: '#ddd', borderRadius: '4px' },
+				'.input-container.is-focus': { borderColor: '#1a56db' },
+				'.input-container.is-error': { borderColor: '#dc2626' },
+			},
+		} );
 
-	if ( ! squareState.card ) {
-		squareState.card = await payments.card( options );
-	}
+		if ( ! squareState.card ) {
+			squareState.card = await payments.card( options );
+		}
 
-	await squareState.card.attach( '#storeengine-square-card-element' );
-	isMounted = true;
+		await squareState.card.attach( '#storeengine-square-card-element' );
+		doAction( 'storeengine.square.card_mounted', squareState.card );
+	} )();
 
-	// Notify listeners (e.g. accessibility tools, analytics).
-	doAction( 'storeengine.square.card_mounted', squareState.card );
+	return mountPromise;
 }
 
 // ─── Tokenization ─────────────────────────────────────────────────────────────
 
-/**
- * Tokenize the card data entered in the widget.
- *
- * @param {any}    card       Square Card widget instance.
- * @param {Object} formData   Checkout form data (for verification token).
- *
- * @return {Promise<string>}  Square nonce (token).
- */
 async function tokenizeCard( card, formData ) {
 	const result = await card.tokenize();
 
 	if ( result.status !== 'OK' ) {
-		const errors = result.errors ?? [];
+		const errors  = result.errors ?? [];
 		const message = errors.map( ( e ) => e.message ).join( ' ' ) ||
 			__( 'Card tokenization failed. Please check your card details.', 'storeengine-square' );
-
 		throw new Error( message );
 	}
 
 	const token = result.token;
-
-	/**
-	 * Fires after a card is tokenized.
-	 * Use this to run SCA verification or additional checks.
-	 */
 	await doActionAsync( 'storeengine.square.after_tokenize', token, formData );
-
 	return token;
 }
 
-// ─── registerGateway implementation ──────────────────────────────────────────
+// ─── registerGateway ─────────────────────────────────────────────────────────
 
-/**
- * Registers the Square gateway handler with StoreEngine CheckoutManager.
- * Called once when this script loads.
- */
 export function initSquareGateway() {
 	window.StoreEngineCheckout?.registerGateway( 'square', {
 
 		/**
 		 * Called when the customer selects Square at checkout.
-		 * Mounts the card widget.
+		 *
+		 * Mount the card widget. StoreEngine's tokenization handler (qr class)
+		 * already manages show/hide of the form based on the saved-card radio
+		 * selection — we intentionally do not duplicate that here.
 		 */
 		async onSelected() {
 			try {
@@ -228,38 +202,36 @@ export function initSquareGateway() {
 		},
 
 		/**
-		 * Called when the customer clicks "Place Order" with Square selected.
-		 * Tokenizes the card, appends the nonce to the form, then POSTs to StoreEngine.
+		 * Called when the customer clicks "Place Order".
 		 *
-		 * @param {GatewayContext} context
-		 * @return {Promise<Object>} Server response.
+		 * Path A — saved card selected:
+		 *   Token ID is already in the form via StoreEngine's radio input.
+		 *   PHP reads it via get_selected_token_from_request(). No SDK needed.
+		 *
+		 * Path B — new card:
+		 *   Tokenize via Square SDK, POST nonce as square_payment_token.
 		 */
 		async processPayment( { checkout_action, makeRequest } ) {
 			clearError();
 
-			if ( ! squareState?.card ) {
-				throw new Error( __( 'Card widget is not initialized. Please refresh and try again.', 'storeengine-square' ) );
+			// Path A — saved card: skip tokenization entirely.
+			if ( getSelectedSavedToken() ) {
+				return await makeRequest( checkout_action, {} );
 			}
 
-			// 1. Get the form data that will be sent to the server.
+			// Path B — new card.
+			if ( ! squareState?.card ) {
+				throw new Error(
+					__( 'Card widget is not initialized. Please refresh and try again.', 'storeengine-square' )
+				);
+			}
+
 			const formData = window.StoreEngineCheckout.getFormData();
+			const token    = await tokenizeCard( squareState.card, formData );
 
-			// 2. Tokenize the card.
-			const token = await tokenizeCard( squareState.card, formData );
-
-			// 3. Inject the Square nonce into the payload.
-			//    GatewaySquare::process_payment() reads $_POST['square_payment_token'].
-			const extraPayload = { square_payment_token: token };
-
-			// 4. POST to StoreEngine checkout action — same as every other gateway.
-			const response = await makeRequest( checkout_action, extraPayload );
-
-			return response;
+			return await makeRequest( checkout_action, { square_payment_token: token } );
 		},
 
-		/**
-		 * Called when totals change. Square doesn't need client-side amount updates.
-		 */
 		onCheckoutUpdated() {
 			// No-op — Square reads the amount from the order on the server.
 		},
@@ -269,10 +241,6 @@ export function initSquareGateway() {
 // ─── Entrypoint ───────────────────────────────────────────────────────────────
 
 document.addEventListener( 'DOMContentLoaded', () => {
-	// Guard: only run when StoreEngineCheckout is available.
-	if ( ! window.StoreEngineCheckout ) {
-		return;
-	}
-
+	if ( ! window.StoreEngineCheckout ) return;
 	initSquareGateway();
 } );

@@ -51,9 +51,8 @@ class GatewaySquare extends PaymentGateway {
 		$this->description = $this->get_option( 'description' );
 		$this->saved_cards = (bool) $this->get_option( 'saved_cards', false );
 
-		// StoreEngine's subscription scheduler fires this action for every renewal
-		// and installment — our handler charges the saved card off-session.
-		add_action( 'storeengine/subscription/scheduled_payment_' . $this->id, [ $this, 'process_scheduled_payment' ] );
+		// Registers both subscription and installment-plan scheduled payment hooks.
+		$this->register_subscription_hooks();
 	}
 
 	// ── Setup ─────────────────────────────────────────────────────────────────
@@ -367,6 +366,12 @@ class GatewaySquare extends PaymentGateway {
 			$save_card = true;
 		}
 
+		// Tracks which path was taken so the card-save block below behaves correctly:
+		//   Path A (saved token)  → $using_saved = true,  card_id = token itself (ccof:…)
+		//   Path B (new nonce)    → $using_saved = false, card_id set after Cards::create()
+		$using_saved = false;
+		$card_id     = '';       // populated per-path before meta storage
+
 		try {
 			// ── Path A: Saved card-on-file ─────────────────────────────────────
 			if ( $selected_token && 'new' !== $selected_token ) {
@@ -401,6 +406,12 @@ class GatewaySquare extends PaymentGateway {
 					$customer_id,
 					$idem_key
 				);
+
+				// The token IS the reusable card-on-file ID (ccof:…).
+				// Store it now so the meta-save block below uses it directly
+				// and never falls through to the ephemeral payment-response card.
+				$card_id     = $token->get_token();
+				$using_saved = true;
 
 			// ── Path B: New card nonce from Square.js ──────────────────────────
 			} else {
@@ -471,12 +482,18 @@ class GatewaySquare extends PaymentGateway {
 			$order->add_meta_data( '_square_card_last4',      $last4,       true );
 			$order->add_meta_data( '_square_processing_fee',  $fee_amount,  true );
 
-			// ── Save card on-file (correct Square flow) ──────────────────────────
-			// Square's CreatePayment API has NO "store card" flag — setStorePaymentMethodInVault()
-			// does not exist. The correct flow is a separate Cards::create() call using
-			// the completed payment ID as the sourceId (Square accepts this in place of a nonce).
-			$card_id = '';
-			if ( $save_card && is_user_logged_in() && $sq_customer ) {
+			// ── Save card on-file — Path B only (correct Square flow) ──────────
+			//
+			// Square's CreatePayment API has NO "store card" flag.
+			// The correct flow is a separate Cards::create() call after the payment
+			// succeeds, using the completed payment ID as the sourceId.
+			//
+			// Path A skips this block entirely: $card_id is already set from
+			// $token->get_token() above — that IS the real ccof:… card-on-file ID.
+			// Calling save_card_from_payment() again in Path A would attempt to
+			// re-vault a card that is already saved, wasting an API call and
+			// potentially creating a duplicate token.
+			if ( ! $using_saved && $save_card && is_user_logged_in() && $sq_customer ) {
 				$saved_card = $service->save_card_from_payment( $sq_customer, $payment_id );
 				if ( $saved_card ) {
 					$card_id   = (string) $saved_card->getId();
@@ -494,11 +511,14 @@ class GatewaySquare extends PaymentGateway {
 				}
 			}
 
-			// Fallback: when using a saved token (Path A), the card_id comes from
-			// the token already. Populate from payment response as a secondary source.
-			if ( ! $card_id ) {
-				$card_id = (string) ( $square_payment->getCardDetails()?->getCard()?->getId() ?? '' );
-			}
+			// $card_id at this point:
+			//   Path A → set from $token->get_token() — always a real ccof:… ID
+			//   Path B → set from save_card_from_payment() if card was saved,
+			//            otherwise empty (guest checkout / save not requested)
+			// DO NOT fall back to getCardDetails()->getCard()->getId() — that returns
+			// an ephemeral card object embedded in the payment response, not a
+			// reusable card-on-file ID. Storing it as _square_source_id would cause
+			// every subsequent renewal charge to fail with CARD_TOKEN_USED.
 
 			// _square_source_id is read by process_scheduled_payment() for every
 			// subscription renewal / installment — must be a reusable ccof:… ID.
@@ -997,14 +1017,10 @@ class GatewaySquare extends PaymentGateway {
 
 			foreach ( $subscriptions as $subscription ) {
 				if ( $subscription->has_status( [ 'active', 'pending' ] ) ) {
-					$subscription->update_status(
-						'on_hold',
-						sprintf(
-							/* translators: %s: error message */
-							__( 'Subscription put on hold because automatic renewal payment failed. Reason: %s', 'storeengine-square' ),
-							$reason
-						)
-					);
+					// payment_failed() marks the last order as failed, fires payment_failed actions,
+					// and triggers retry scheduling (via storeengine/subscription/renewal_payment_failed).
+					// Passing 'on_hold' puts the subscription on hold rather than cancelling it.
+					$subscription->payment_failed( 'on_hold' );
 				}
 			}
 		} catch ( \Throwable $e ) {
