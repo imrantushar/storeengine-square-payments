@@ -592,7 +592,8 @@ class GatewaySquare extends PaymentGateway {
 			return new WP_Error( 'invalid-order', __( 'Invalid order.', 'storeengine-square' ) );
 		}
 
-		if ( '0.00' === sprintf( '%0.2f', $amount ?? 0 ) ) {
+		$amount = abs( (float) ( $amount ?? 0 ) );
+		if ( '0.00' === sprintf( '%0.2f', $amount ) ) {
 			return true; // Zero-amount refund is a no-op.
 		}
 
