@@ -53,6 +53,7 @@ class GatewaySquare extends PaymentGateway {
 
 		// Registers both subscription and installment-plan scheduled payment hooks.
 		$this->register_subscription_hooks();
+		$this->tokenization_script();
 	}
 
 	// ── Setup ─────────────────────────────────────────────────────────────────
@@ -61,7 +62,7 @@ class GatewaySquare extends PaymentGateway {
 		$this->id                 = 'square';
 		$this->icon               = apply_filters(
 			'storeengine/square_icon',
-			SE_SQUARE_URL . 'assets/images/square.svg'
+			SE_SQUARE_URL . 'assets/images/squareup.svg'
 		);
 		$this->method_title       = __( 'Square', 'storeengine-square' );
 		$this->method_description = __( 'Accept payments securely via Square Web Payments SDK. Card data never touches your server.', 'storeengine-square' );
@@ -272,9 +273,6 @@ class GatewaySquare extends PaymentGateway {
 
 	public function payment_fields(): void {
 		$description          = (string) $this->get_description();
-		$display_tokenization = $this->supports( 'tokenization' )
-			&& Helper::is_checkout()
-			&& $this->is_saved_cards_enabled();
 
 		// Add sandbox notice.
 		if ( ! $this->get_option( 'is_production', false ) ) {
@@ -293,8 +291,7 @@ class GatewaySquare extends PaymentGateway {
 			<?php echo wpautop( wptexturize( $description ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
 		</div>
 		<?php
-		if ( $display_tokenization ) {
-			$this->tokenization_script();
+		if ( $this->maybe_display_tokenization() ) {
 			$this->saved_payment_methods();
 		}
 		?>
@@ -306,12 +303,13 @@ class GatewaySquare extends PaymentGateway {
 			<div id="storeengine-square-card-errors" class="storeengine-square-errors" role="alert"></div>
 		</fieldset>
 		<?php
-		if ( $display_tokenization ) {
+		if ( $this->is_saved_cards_enabled() ) {
 			// Force the save checkbox when the cart contains a subscription or
 			// installment — the customer must save their card so renewals can
 			// be charged automatically without browser interaction.
-			$this->save_payment_method_checkbox( $this->should_force_save_payment() );
+			$this->save_payment_method_checkbox( $this->maybe_force_save_payment() );
 		}
+
 		ob_end_flush();
 	}
 
@@ -356,15 +354,9 @@ class GatewaySquare extends PaymentGateway {
 		// phpcs:disable WordPress.Security.NonceVerification.Missing
 		$source_id      = sanitize_text_field( wp_unslash( $_POST['square_payment_token'] ?? '' ) );
 		$selected_token = $this->get_selected_token_from_request();
-		$save_card      = (bool) $this->maybe_user_request_saved_payment_method();
 		// phpcs:enable WordPress.Security.NonceVerification.Missing
 
-		// Subscriptions and installments MUST save the card so that StoreEngine's
-		// scheduler can charge it off-session on every renewal.
-		$has_subscription = Helper::cart() && Helper::cart()->get_meta( 'has_subscription' );
-		if ( $has_subscription || $this->should_force_save_payment() ) {
-			$save_card = true;
-		}
+		$save_card = $this->should_force_save_payment( $order );
 
 		// Tracks which path was taken so the card-save block below behaves correctly:
 		//   Path A (saved token)  → $using_saved = true,  card_id = token itself (ccof:…)
@@ -756,29 +748,6 @@ class GatewaySquare extends PaymentGateway {
 	}
 
 	// ── Subscription & installment support ───────────────────────────────────────
-
-	/**
-	 * Determine whether to force the "save payment method" checkbox on.
-	 *
-	 * Returns true when:
-	 *   - We are on the "Add Payment Method" page (always save)
-	 *   - The cart contains a subscription or installment plan
-	 *
-	 * When forced, the checkbox is pre-checked and the customer cannot uncheck it —
-	 * a saved card is required for automatic renewals.
-	 *
-	 * @return bool
-	 */
-	private function should_force_save_payment(): bool {
-		if ( Helper::is_add_payment_method_page() ) {
-			return true;
-		}
-
-		return (bool) apply_filters(
-			'storeengine/square/force_save_payment_method',
-			Helper::cart() && Helper::cart()->get_meta( 'has_subscription' )
-		);
-	}
 
 	/**
 	 * Copy Square customer ID and card (source) ID onto all subscriptions linked
