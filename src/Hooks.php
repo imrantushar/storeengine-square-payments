@@ -19,10 +19,8 @@ class Hooks {
 			if ( $gateway->is_available() ) {
 				add_filter( 'storeengine/frontend_scripts_payment_method_data', [ __CLASS__, 'inject_js_params' ] );
 			}
-
-			// Ensure 'square' never lands in the manual_payment_methods list.
-			add_filter( 'storeengine/manual_payment_methods', [ __CLASS__, 'exclude_from_manual' ] );
 		}
+
 		return self::$instance;
 	}
 
@@ -37,9 +35,5 @@ class Hooks {
 			'is_sandbox'     => ! $service->is_live(),
 		];
 		return $payment_method;
-	}
-
-	public static function exclude_from_manual( array $methods ): array {
-		return array_values( array_diff( $methods, [ 'square' ] ) );
 	}
 }
