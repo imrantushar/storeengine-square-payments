@@ -2,50 +2,49 @@
 /**
  * SquareService
  *
- * Wraps the official square/square Composer SDK (v43+).
+ * Wraps the official square/square Composer SDK (v40.x).
  * All Square API calls go through this class — no raw HTTP anywhere else.
  *
  * INSTALL
- *   composer require square/square  (^43.0, PHP ^8.1)
+ *   composer require square/square  (^40.0)
  *
- * SDK NAMESPACE MAP (v41+ full rewrite — breaking change from v40)
+ * SDK NAMESPACE MAP (v40)
  *   Square\SquareClient                              main client
- *   Square\Environments                              Production / Sandbox enum
- *   Square\Exceptions\SquareException                all API-level errors
- *   Square\Types\Money                               { amount:int, currency:string }
- *   Square\Types\Currency                            enum  Currency::Usd->value = 'USD'
- *   Square\Types\Address                             address value object
- *   Square\Types\Card                                card response object
- *   Square\Types\Payment                             payment response object
- *   Square\Payments\Requests\CreatePaymentRequest    POST /v2/payments
- *   Square\Refunds\Requests\RefundPaymentRequest     POST /v2/refunds
- *   Square\Customers\Requests\CreateCustomerRequest  POST /v2/customers
- *   Square\Cards\Requests\CreateCardRequest          POST /v2/cards
+ *   Square\Environment                               Production / Sandbox string constants
+ *   Square\Exceptions\ApiException                   all API-level errors
+ *   Square\Models\Money                              { amount:int, currency:string }
+ *   Square\Models\Address                            address value object
+ *   Square\Models\Card                               card response object
+ *   Square\Models\Payment                            payment response object
+ *   Square\Models\CreatePaymentRequest               POST /v2/payments
+ *   Square\Models\RefundPaymentRequest               POST /v2/refunds
+ *   Square\Models\CreateCustomerRequest              POST /v2/customers
+ *   Square\Models\CreateCardRequest                  POST /v2/cards
  *
- * CLIENT RESOURCE PROPERTIES
- *   $client->payments   PaymentsClient  (create, get, cancel, complete)
- *   $client->refunds    RefundsClient   (refundPayment, getPaymentRefund)
- *   $client->customers  CustomersClient (create, retrieve, search, update, delete)
- *   $client->cards      CardsClient     (create, retrieve, disable, list)
- *   $client->locations  LocationsClient (get, list, create, update)
+ * CLIENT RESOURCE METHODS
+ *   $client->getPaymentsApi()   PaymentsApi  (createPayment, getPayment, cancelPayment, completePayment)
+ *   $client->getRefundsApi()    RefundsApi   (refundPayment, getPaymentRefund)
+ *   $client->getCustomersApi()  CustomersApi (createCustomer, retrieveCustomer, searchCustomers, updateCustomer, deleteCustomer)
+ *   $client->getCardsApi()      CardsApi     (createCard, retrieveCard, disableCard, listCards)
+ *   $client->getLocationsApi()  LocationsApi (retrieveLocation, listLocations, createLocation, updateLocation)
  *
  * @package StoreEngineSquare
  */
 
 namespace StoreEngineSquare;
 
-use Square\Cards\Requests\CreateCardRequest;
-use Square\Customers\Requests\CreateCustomerRequest;
-use Square\Exceptions\SquareException;
-use Square\Locations\Requests\GetLocationsRequest;
-use Square\Payments\Requests\CreatePaymentRequest;
-use Square\Refunds\Requests\RefundPaymentRequest;
+use Square\Environment;
+use Square\Exceptions\ApiException;
+use Square\Models\Address;
+use Square\Models\Card;
+use Square\Models\CreateCardRequest;
+use Square\Models\CreateCustomerRequest;
+use Square\Models\CreatePaymentRequest;
+use Square\Models\Money;
+use Square\Models\Payment;
+use Square\Models\PaymentRefund;
+use Square\Models\RefundPaymentRequest;
 use Square\SquareClient;
-use Square\Environments;
-use Square\Types\Address;
-use Square\Types\Card;
-use Square\Types\Money;
-use Square\Types\Payment;
 use StoreEngine\Classes\Exceptions\StoreEngineException;
 use StoreEngine\Classes\Order;
 use StoreEngine\Payment_Gateways;
@@ -125,12 +124,12 @@ final class SquareService {
 	/**
 	 * Read gateway settings and build the SquareClient.
 	 *
-	 * The v41+ SDK constructor signature:
-	 *   new SquareClient( token: string, options: array )
+	 * The v40 SDK constructor signature:
+	 *   new SquareClient( array $config )
 	 *
-	 * The 'baseUrl' option accepts a value from the Environments enum:
-	 *   Environments::Production->value  →  'https://connect.squareup.com'
-	 *   Environments::Sandbox->value     →  'https://connect.squareupsandbox.com'
+	 * The 'environment' option accepts a value from the Environment class:
+	 *   Environment::PRODUCTION  →  'production'
+	 *   Environment::SANDBOX     →  'sandbox'
 	 */
 	private function init_settings(): void {
 		if ( ! $this->gateway || ! $this->gateway->is_enabled || 'square' !== $this->gateway->id ) {
@@ -147,14 +146,10 @@ final class SquareService {
 			return;
 		}
 
-		$this->client = new SquareClient(
-			token  : $this->access_token,
-			options: [
-				'baseUrl' => $this->is_live
-					? Environments::Production->value
-					: Environments::Sandbox->value,
-			]
-		);
+		$this->client = new SquareClient( [
+			'accessToken' => $this->access_token,
+			'environment' => $this->is_live ? Environment::PRODUCTION : Environment::SANDBOX,
+		] );
 	}
 
 	// ── Payment operations ────────────────────────────────────────────────────
@@ -191,40 +186,35 @@ final class SquareService {
 		//
 		// We pass customerId here so Square links the charge to the customer record
 		// (required when later charging that customer's card on file).
-		$args = [
-			// Required.
-			'idempotencyKey' => $idempotency_key,
-			'sourceId'       => $source_id,
-			'amountMoney'    => new Money( [
-				'amount'   => self::get_square_amount(
-					(float) $order->get_total( 'square_payment' ),
-					$order->get_currency()
-				),
-				'currency' => strtoupper( $order->get_currency() ),
-			] ),
-			// Recommended.
-			'autocomplete'      => true,
-			'locationId'        => $this->location_id,
-			'referenceId'       => (string) $order->get_id(),
-			'buyerEmailAddress' => $order->get_billing_email(),
-			'billingAddress'    => $this->build_address( $order ),
-			'note'              => sprintf(
-				/* translators: 1: site name 2: order ID */
-				__( 'Payment for %1$s – Order #%2$s', 'storeengine-square' ),
-				get_bloginfo( 'name' ),
-				$order->get_id()
-			),
-		];
+		$amount_money = new Money();
+		$amount_money->setAmount( self::get_square_amount(
+			(float) $order->get_total( 'square_payment' ),
+			$order->get_currency()
+		) );
+		$amount_money->setCurrency( strtoupper( $order->get_currency() ) );
+
+		$request = new CreatePaymentRequest( $source_id, $idempotency_key );
+		$request->setAmountMoney( $amount_money );
+		$request->setAutocomplete( true );
+		$request->setLocationId( $this->location_id );
+		$request->setReferenceId( (string) $order->get_id() );
+		$request->setBuyerEmailAddress( $order->get_billing_email() );
+		$request->setBillingAddress( $this->build_address( $order ) );
+		$request->setNote( sprintf(
+			/* translators: 1: site name 2: order ID */
+			__( 'Payment for %1$s – Order #%2$s', 'storeengine-square' ),
+			get_bloginfo( 'name' ),
+			$order->get_id()
+		) );
 
 		if ( $customer_id ) {
-			$args['customerId'] = $customer_id;
+			$request->setCustomerId( $customer_id );
 		}
 
 		try {
-			return $this->client->payments->create(
-				request: new CreatePaymentRequest( $args )
-			)->getPayment();
-		} catch ( SquareException $e ) {
+			$response = $this->client->getPaymentsApi()->createPayment( $request );
+			return $response->getResult()->getPayment();
+		} catch ( ApiException $e ) {
 			throw $this->convert_exception( $e, 'square-create-payment-failed' );
 		}
 	}
@@ -282,25 +272,24 @@ final class SquareService {
 	): Payment {
 		$this->assert_client();
 
-		$request = new CreatePaymentRequest( [
-			'idempotencyKey' => $idempotency_key,
-			'sourceId'       => $card_id,
-			'customerId'     => $customer_id,
-			'amountMoney'    => new Money( [
-				'amount'   => self::get_square_amount(
-					(float) $order->get_total( 'square_payment' ),
-					$order->get_currency()
-				),
-				'currency' => strtoupper( $order->get_currency() ),
-			] ),
-			'autocomplete' => true,
-			'locationId'   => $this->location_id,
-			'referenceId'  => (string) $order->get_id(),
-		] );
+		$amount_money = new Money();
+		$amount_money->setAmount( self::get_square_amount(
+			(float) $order->get_total( 'square_payment' ),
+			$order->get_currency()
+		) );
+		$amount_money->setCurrency( strtoupper( $order->get_currency() ) );
+
+		$request = new CreatePaymentRequest( $card_id, $idempotency_key );
+		$request->setCustomerId( $customer_id );
+		$request->setAmountMoney( $amount_money );
+		$request->setAutocomplete( true );
+		$request->setLocationId( $this->location_id );
+		$request->setReferenceId( (string) $order->get_id() );
 
 		try {
-			return $this->client->payments->create( request: $request )->getPayment();
-		} catch ( SquareException $e ) {
+			$response = $this->client->getPaymentsApi()->createPayment( $request );
+			return $response->getResult()->getPayment();
+		} catch ( ApiException $e ) {
 			throw $this->convert_exception( $e, 'square-saved-card-payment-failed' );
 		}
 	}
@@ -317,8 +306,9 @@ final class SquareService {
 		$this->assert_client();
 
 		try {
-			return $this->client->payments->get( paymentId: $payment_id )->getPayment();
-		} catch ( SquareException $e ) {
+			$response = $this->client->getPaymentsApi()->getPayment( $payment_id );
+			return $response->getResult()->getPayment();
+		} catch ( ApiException $e ) {
 			throw $this->convert_exception( $e, 'square-get-payment-failed' );
 		}
 	}
@@ -333,29 +323,30 @@ final class SquareService {
 	 * @param string $currency     ISO 4217 currency code.
 	 * @param string $reason       Optional reason (max 192 chars per Square).
 	 *
-	 * @return \Square\Types\PaymentRefund
+	 * @return PaymentRefund
 	 * @throws StoreEngineException
 	 */
-	public function refund_payment( string $payment_id, float $amount, string $currency, string $reason = '' ): \Square\Types\PaymentRefund {
+	public function refund_payment( string $payment_id, float $amount, string $currency, string $reason = '' ): PaymentRefund {
 		$this->assert_client();
 
-		$args = [
-			'idempotencyKey' => $this->generate_idempotency_key( 'refund_' . $payment_id . '_' . $amount ),
-			'paymentId'      => $payment_id,
-			'amountMoney'    => new Money( [
-				'amount'   => self::get_square_amount( $amount, $currency ),
-				'currency' => strtoupper( $currency ),
-			] ),
-		];
+		$amount_money = new Money();
+		$amount_money->setAmount( self::get_square_amount( $amount, $currency ) );
+		$amount_money->setCurrency( strtoupper( $currency ) );
+
+		$request = new RefundPaymentRequest(
+			$this->generate_idempotency_key( 'refund_' . $payment_id . '_' . $amount ),
+			$amount_money
+		);
+		$request->setPaymentId( $payment_id );
 
 		if ( $reason ) {
-			$args['reason'] = sanitize_text_field( mb_substr( $reason, 0, 192 ) );
+			$request->setReason( sanitize_text_field( mb_substr( $reason, 0, 192 ) ) );
 		}
 
 		try {
-			return $this->client->refunds->refundPayment( request: new RefundPaymentRequest( $args ) )
-			                             ->getRefund();
-		} catch ( SquareException $e ) {
+			$response = $this->client->getRefundsApi()->refundPayment( $request );
+			return $response->getResult()->getRefund();
+		} catch ( ApiException $e ) {
 			throw $this->convert_exception( $e, 'square-refund-failed' );
 		}
 	}
@@ -386,19 +377,21 @@ final class SquareService {
 			}
 		}
 
-		$args = [
-			'idempotencyKey' => $this->generate_idempotency_key( 'customer_' . $user_id . '_' . md5( $email ) ),
-			'emailAddress'   => sanitize_email( $email ),
-		];
+		$idem_key = $this->generate_idempotency_key( 'customer_' . $user_id . '_' . md5( $email ) );
+
+		$request = new CreateCustomerRequest();
+		$request->setIdempotencyKey( $idem_key );
+		$request->setEmailAddress( sanitize_email( $email ) );
 
 		if ( $name ) {
-			$parts             = explode( ' ', trim( $name ), 2 );
-			$args['givenName']  = $parts[0];
-			$args['familyName'] = $parts[1] ?? '';
+			$parts = explode( ' ', trim( $name ), 2 );
+			$request->setGivenName( $parts[0] );
+			$request->setFamilyName( $parts[1] ?? '' );
 		}
 
 		try {
-			$customer    = $this->client->customers->create( request: new CreateCustomerRequest( $args ) )->getCustomer();
+			$response    = $this->client->getCustomersApi()->createCustomer( $request );
+			$customer    = $response->getResult()->getCustomer();
 			$customer_id = $customer->getId();
 
 			// Cache in user-meta for future calls.
@@ -407,7 +400,7 @@ final class SquareService {
 			}
 
 			return (string) $customer_id;
-		} catch ( SquareException $e ) {
+		} catch ( ApiException $e ) {
 			throw $this->convert_exception( $e, 'square-create-customer-failed' );
 		}
 	}
@@ -430,17 +423,15 @@ final class SquareService {
 	public function create_card( string $customer_id, string $source_id, string $idempotency_key ): Card {
 		$this->assert_client();
 
-		$request = new CreateCardRequest( [
-			'idempotencyKey' => $idempotency_key,
-			'sourceId'       => $source_id,
-			'card'           => new Card( [
-				'customerId' => $customer_id,
-			] ),
-		] );
+		$card = new Card();
+		$card->setCustomerId( $customer_id );
+
+		$request = new CreateCardRequest( $idempotency_key, $source_id, $card );
 
 		try {
-			return $this->client->cards->create( request: $request )->getCard();
-		} catch ( SquareException $e ) {
+			$response = $this->client->getCardsApi()->createCard( $request );
+			return $response->getResult()->getCard();
+		} catch ( ApiException $e ) {
 			throw $this->convert_exception( $e, 'square-create-card-failed' );
 		}
 	}
@@ -456,10 +447,10 @@ final class SquareService {
 	public function disable_card( string $card_id ): bool {
 		try {
 			$this->assert_client();
-			$this->client->cards->disable( cardId: $card_id );
+			$this->client->getCardsApi()->disableCard( $card_id );
 
 			return true;
-		} catch ( SquareException | StoreEngineException $e ) {
+		} catch ( ApiException | StoreEngineException $e ) {
 			Helper::log_error( $e );
 
 			return false;
@@ -478,25 +469,24 @@ final class SquareService {
 	 *
 	 * @return true|WP_Error
 	 */
-	public static function validate_credentials( string $access_token, string $location_id, bool $is_live ): true|WP_Error {
+	public static function validate_credentials( string $access_token, string $location_id, bool $is_live ) {
 		try {
-			$client = new SquareClient(
-				token  : $access_token,
-				options: [
-					'baseUrl' => $is_live
-						? Environments::Production->value
-						: Environments::Sandbox->value,
-				]
-			);
+			$client = new SquareClient( [
+				'accessToken' => $access_token,
+				'environment' => $is_live ? Environment::PRODUCTION : Environment::SANDBOX,
+			] );
 
-			$client->locations->get(
-				new GetLocationsRequest( [ 'locationId' => $location_id ] )
-			);
+			$client->getLocationsApi()->retrieveLocation( $location_id );
 
 			return true;
-		} catch ( SquareException $e ) {
-			$first_error = $e->getErrors()[0] ?? null;
-			$message     = $first_error?->getDetail() ?? $e->getMessage();
+		} catch ( ApiException $e ) {
+			$errors  = [];
+			if ( $e->hasResponse() ) {
+				$body   = json_decode( $e->getHttpResponse()->getRawBody(), true );
+				$errors = $body['errors'] ?? [];
+			}
+			$first   = $errors[0] ?? null;
+			$message = isset( $first['detail'] ) ? $first['detail'] : $e->getMessage();
 
 			return new WP_Error( 'square-invalid-credentials', esc_html( $message ) );
 		}
@@ -590,36 +580,59 @@ final class SquareService {
 	 * @return Address
 	 */
 	private function build_address( Order $order ): Address {
-		$args = array_filter( [
-			'addressLine1'                 => $order->get_billing_address_1(),
-			'addressLine2'                 => $order->get_billing_address_2(),
-			'locality'                     => $order->get_billing_city(),
-			'administrativeDistrictLevel1' => $order->get_billing_state(),
-			'postalCode'                   => $order->get_billing_postcode(),
-			'country'                      => $order->get_billing_country(),
-			'firstName'                    => $order->get_billing_first_name(),
-			'lastName'                     => $order->get_billing_last_name(),
-		] );
+		$address = new Address();
 
-		return new Address( $args );
+		if ( $order->get_billing_address_1() ) {
+			$address->setAddressLine1( $order->get_billing_address_1() );
+		}
+		if ( $order->get_billing_address_2() ) {
+			$address->setAddressLine2( $order->get_billing_address_2() );
+		}
+		if ( $order->get_billing_city() ) {
+			$address->setLocality( $order->get_billing_city() );
+		}
+		if ( $order->get_billing_state() ) {
+			$address->setAdministrativeDistrictLevel1( $order->get_billing_state() );
+		}
+		if ( $order->get_billing_postcode() ) {
+			$address->setPostalCode( $order->get_billing_postcode() );
+		}
+		if ( $order->get_billing_country() ) {
+			$address->setCountry( $order->get_billing_country() );
+		}
+		if ( $order->get_billing_first_name() ) {
+			$address->setFirstName( $order->get_billing_first_name() );
+		}
+		if ( $order->get_billing_last_name() ) {
+			$address->setLastName( $order->get_billing_last_name() );
+		}
+
+		return $address;
 	}
 
 	/**
-	 * Convert a SquareException into a StoreEngineException.
+	 * Convert an ApiException into a StoreEngineException.
 	 *
-	 * The SquareException wraps one or more Square API Error objects.
-	 * We surface the first error's detail string as the message.
+	 * The ApiException wraps an HTTP response whose body contains one or more
+	 * Square API Error objects in JSON form. We surface the first error's detail
+	 * string as the message.
 	 *
-	 * @param SquareException $e
-	 * @param string          $code  Internal error code slug.
+	 * @param ApiException $e
+	 * @param string       $code  Internal error code slug.
 	 *
 	 * @return StoreEngineException
 	 */
-	private function convert_exception( SquareException $e, string $code ): StoreEngineException {
-		$errors       = $e->getErrors();
-		$first        = $errors[0] ?? null;
-		$message      = $first?->getDetail() ?? $e->getMessage();
-		$http_status  = $e->getCode() ?: 400;
+	private function convert_exception( ApiException $e, string $code ): StoreEngineException {
+		$errors      = [];
+		$http_status = $e->getCode() ?: 400;
+
+		if ( $e->hasResponse() ) {
+			$body   = json_decode( $e->getHttpResponse()->getRawBody(), true );
+			$errors = isset( $body['errors'] ) && is_array( $body['errors'] ) ? $body['errors'] : [];
+		}
+
+		$first   = $errors[0] ?? null;
+		$message = isset( $first['detail'] ) ? $first['detail'] : $e->getMessage();
 
 		Helper::log_error( $e );
 
@@ -628,11 +641,13 @@ final class SquareService {
 			$code,
 			[
 				'square_errors' => array_map(
-					static fn( $err ) => [
-						'category' => $err->getCategory(),
-						'code'     => $err->getCode(),
-						'detail'   => $err->getDetail(),
-					],
+					static function ( $err ) {
+						return [
+							'category' => $err['category'] ?? '',
+							'code'     => $err['code'] ?? '',
+							'detail'   => $err['detail'] ?? '',
+						];
+					},
 					$errors
 				),
 			],

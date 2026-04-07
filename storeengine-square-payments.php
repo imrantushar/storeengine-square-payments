@@ -11,7 +11,7 @@
  * Text Domain:     storeengine-square
  * Domain Path:     /languages/
  *
- * Requires PHP:          8.1
+ * Requires PHP:          7.4
  * Requires at least:     6.5
  * Requires Plugins:      storeengine
  *

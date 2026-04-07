@@ -1,5 +1,4 @@
 <?php
-
 namespace Square\Utils;
 
 use Exception;
@@ -7,8 +6,7 @@ use Exception;
 /**
  * Utility to help with Square Webhooks
  */
-class WebhooksHelper
-{
+class WebhooksHelper {
     /**
      * Verifies and validates an event notification.
      * See the documentation for more details.
@@ -20,33 +18,32 @@ class WebhooksHelper
      * @return bool                     `true` if the signature is valid, indicating that the event can be trusted as it came from Square. `false` if the signature validation fails, indicating that the event did not come from Square, so it may be malicious and should be discarded.
      * @throws Exception                If the signatureKey or notificationUrl is null or empty.
      */
-    public static function verifySignature(
+    public static function isValidWebhookEventSignature(
         string $requestBody,
         string $signatureHeader,
         string $signatureKey,
         string $notificationUrl
     ): bool {
-        if (strlen($requestBody) === 0) {
+
+        if ($requestBody === null) {
             return false;
         }
-        if (strlen($signatureKey) === 0) {
+
+        if ($signatureKey === null || strlen($signatureKey) === 0) {
             throw new Exception('signatureKey is null or empty');
         }
-        if (strlen($notificationUrl) === 0) {
+        if ($notificationUrl === null || strlen($notificationUrl) === 0) {
             throw new Exception('notificationUrl is null or empty');
         }
 
-        // Compute the payload.
+        // Perform UTF-8 encoding to bytes
         $payload = $notificationUrl . $requestBody;
+        $payloadBytes = mb_convert_encoding($payload, 'UTF-8');
+        $signatureKeyBytes = mb_convert_encoding($signatureKey, 'UTF-8');
 
         // Compute the hash value
-        $hash = hash_hmac(
-            algo: 'sha256',
-            data: $payload,
-            key: $signatureKey,
-            binary: true
-        );
-
+        $hash = hash_hmac('sha256', $payloadBytes, $signatureKeyBytes, true);
+        
         // Compare the computed hash vs the value in the signature header
         $hashBase64 = base64_encode($hash);
 
