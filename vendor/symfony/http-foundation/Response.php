@@ -98,20 +98,40 @@ class Response
         'proxy_revalidate' => false,
         'max_age' => true,
         's_maxage' => true,
-        'stale_if_error' => true,         // RFC5861
-        'stale_while_revalidate' => true, // RFC5861
         'immutable' => false,
         'last_modified' => true,
         'etag' => true,
     ];
 
-    public ResponseHeaderBag $headers;
+    /**
+     * @var ResponseHeaderBag
+     */
+    public $headers;
 
-    protected string $content;
-    protected string $version;
-    protected int $statusCode;
-    protected string $statusText;
-    protected ?string $charset = null;
+    /**
+     * @var string
+     */
+    protected $content;
+
+    /**
+     * @var string
+     */
+    protected $version;
+
+    /**
+     * @var int
+     */
+    protected $statusCode;
+
+    /**
+     * @var string
+     */
+    protected $statusText;
+
+    /**
+     * @var string
+     */
+    protected $charset;
 
     /**
      * Status codes translation table.
@@ -122,9 +142,9 @@ class Response
      *
      * Unless otherwise noted, the status code is defined in RFC2616.
      *
-     * @var array<int, string>
+     * @var array
      */
-    public static array $statusTexts = [
+    public static $statusTexts = [
         100 => 'Continue',
         101 => 'Switching Protocols',
         102 => 'Processing',            // RFC2518
@@ -190,13 +210,6 @@ class Response
     ];
 
     /**
-     * Tracks headers already sent in informational responses.
-     */
-    private array $sentHeaders;
-
-    /**
-     * @param int $status The HTTP status code (200 "OK" by default)
-     *
      * @throws \InvalidArgumentException When the HTTP status code is not valid
      */
     public function __construct(?string $content = '', int $status = 200, array $headers = [])
@@ -208,18 +221,39 @@ class Response
     }
 
     /**
+     * Factory method for chainability.
+     *
+     * Example:
+     *
+     *     return Response::create($body, 200)
+     *         ->setSharedMaxAge(300);
+     *
+     * @return static
+     *
+     * @deprecated since Symfony 5.1, use __construct() instead.
+     */
+    public static function create(?string $content = '', int $status = 200, array $headers = [])
+    {
+        trigger_deprecation('symfony/http-foundation', '5.1', 'The "%s()" method is deprecated, use "new %s()" instead.', __METHOD__, static::class);
+
+        return new static($content, $status, $headers);
+    }
+
+    /**
      * Returns the Response as an HTTP string.
      *
      * The string representation of the Response is the same as the
      * one that will be sent to the client only if the prepare() method
      * has been called before.
      *
+     * @return string
+     *
      * @see prepare()
      */
-    public function __toString(): string
+    public function __toString()
     {
         return
-            \sprintf('HTTP/%s %s %s', $this->version, $this->statusCode, $this->statusText)."\r\n".
+            sprintf('HTTP/%s %s %s', $this->version, $this->statusCode, $this->statusText)."\r\n".
             $this->headers."\r\n".
             $this->getContent();
     }
@@ -241,7 +275,7 @@ class Response
      *
      * @return $this
      */
-    public function prepare(Request $request): static
+    public function prepare(Request $request)
     {
         $headers = $this->headers;
 
@@ -261,7 +295,7 @@ class Response
             }
 
             // Fix Content-Type
-            $charset = $this->charset ?: 'utf-8';
+            $charset = $this->charset ?: 'UTF-8';
             if (!$headers->has('Content-Type')) {
                 $headers->set('Content-Type', 'text/html; charset='.$charset);
             } elseif (0 === stripos($headers->get('Content-Type') ?? '', 'text/') && false === stripos($headers->get('Content-Type') ?? '', 'charset')) {
@@ -309,53 +343,20 @@ class Response
     /**
      * Sends HTTP headers.
      *
-     * @param positive-int|null $statusCode The status code to use, override the statusCode property if set and not null
-     *
      * @return $this
      */
-    public function sendHeaders(?int $statusCode = null): static
+    public function sendHeaders()
     {
         // headers have already been sent by the developer
         if (headers_sent()) {
-            if (!\in_array(\PHP_SAPI, ['cli', 'phpdbg', 'embed'], true)) {
-                $statusCode ??= $this->statusCode;
-                trigger_deprecation('symfony/http-foundation', '7.4', 'Trying to use "%s::sendHeaders()" after headers have already been sent is deprecated and will throw a PHP warning in 8.0. Use a "StreamedResponse" instead.', static::class);
-                // header(\sprintf('HTTP/%s %s %s', $this->version, $statusCode, $this->statusText), true, $statusCode);
-            }
-
-            return $this;
-        }
-
-        $informationalResponse = $statusCode >= 100 && $statusCode < 200;
-        if ($informationalResponse && !\function_exists('headers_send')) {
-            // skip informational responses if not supported by the SAPI
             return $this;
         }
 
         // headers
         foreach ($this->headers->allPreserveCaseWithoutCookies() as $name => $values) {
-            // As recommended by RFC 8297, PHP automatically copies headers from previous 103 responses, we need to deal with that if headers changed
-            $previousValues = $this->sentHeaders[$name] ?? null;
-            if ($previousValues === $values) {
-                // Header already sent in a previous response, it will be automatically copied in this response by PHP
-                continue;
-            }
-
             $replace = 0 === strcasecmp($name, 'Content-Type');
-
-            if (null !== $previousValues && array_diff($previousValues, $values)) {
-                header_remove($name);
-                $previousValues = null;
-            }
-
-            $newValues = null === $previousValues ? $values : array_diff($values, $previousValues);
-
-            foreach ($newValues as $value) {
+            foreach ($values as $value) {
                 header($name.': '.$value, $replace, $this->statusCode);
-            }
-
-            if ($informationalResponse) {
-                $this->sentHeaders[$name] = $values;
             }
         }
 
@@ -364,16 +365,8 @@ class Response
             header('Set-Cookie: '.$cookie, false, $this->statusCode);
         }
 
-        if ($informationalResponse) {
-            headers_send($statusCode);
-
-            return $this;
-        }
-
-        $statusCode ??= $this->statusCode;
-
         // status
-        header(\sprintf('HTTP/%s %s %s', $this->version, $statusCode, $this->statusText), true, $statusCode);
+        header(sprintf('HTTP/%s %s %s', $this->version, $this->statusCode, $this->statusText), true, $this->statusCode);
 
         return $this;
     }
@@ -383,7 +376,7 @@ class Response
      *
      * @return $this
      */
-    public function sendContent(): static
+    public function sendContent()
     {
         echo $this->content;
 
@@ -393,24 +386,18 @@ class Response
     /**
      * Sends HTTP headers and content.
      *
-     * @param bool $flush Whether output buffers should be flushed
-     *
      * @return $this
      */
-    public function send(bool $flush = true): static
+    public function send()
     {
         $this->sendHeaders();
         $this->sendContent();
-
-        if (!$flush) {
-            return $this;
-        }
 
         if (\function_exists('fastcgi_finish_request')) {
             fastcgi_finish_request();
         } elseif (\function_exists('litespeed_finish_request')) {
             litespeed_finish_request();
-        } elseif (!\in_array(\PHP_SAPI, ['cli', 'phpdbg', 'embed'], true)) {
+        } elseif (!\in_array(\PHP_SAPI, ['cli', 'phpdbg'], true)) {
             static::closeOutputBuffers(0, true);
             flush();
         }
@@ -423,7 +410,7 @@ class Response
      *
      * @return $this
      */
-    public function setContent(?string $content): static
+    public function setContent(?string $content)
     {
         $this->content = $content ?? '';
 
@@ -432,8 +419,10 @@ class Response
 
     /**
      * Gets the current response content.
+     *
+     * @return string|false
      */
-    public function getContent(): string|false
+    public function getContent()
     {
         return $this->content;
     }
@@ -445,7 +434,7 @@ class Response
      *
      * @final
      */
-    public function setProtocolVersion(string $version): static
+    public function setProtocolVersion(string $version): object
     {
         $this->version = $version;
 
@@ -474,15 +463,21 @@ class Response
      *
      * @final
      */
-    public function setStatusCode(int $code, ?string $text = null): static
+    public function setStatusCode(int $code, ?string $text = null): object
     {
         $this->statusCode = $code;
         if ($this->isInvalid()) {
-            throw new \InvalidArgumentException(\sprintf('The HTTP status code "%s" is not valid.', $code));
+            throw new \InvalidArgumentException(sprintf('The HTTP status code "%s" is not valid.', $code));
         }
 
         if (null === $text) {
             $this->statusText = self::$statusTexts[$code] ?? 'unknown status';
+
+            return $this;
+        }
+
+        if (false === $text) {
+            $this->statusText = '';
 
             return $this;
         }
@@ -509,7 +504,7 @@ class Response
      *
      * @final
      */
-    public function setCharset(string $charset): static
+    public function setCharset(string $charset): object
     {
         $this->charset = $charset;
 
@@ -545,7 +540,7 @@ class Response
      */
     public function isCacheable(): bool
     {
-        if (!\in_array($this->statusCode, [200, 203, 300, 301, 302, 404, 410], true)) {
+        if (!\in_array($this->statusCode, [200, 203, 300, 301, 302, 404, 410])) {
             return false;
         }
 
@@ -590,7 +585,7 @@ class Response
      *
      * @final
      */
-    public function setPrivate(): static
+    public function setPrivate(): object
     {
         $this->headers->removeCacheControlDirective('public');
         $this->headers->addCacheControlDirective('private');
@@ -607,7 +602,7 @@ class Response
      *
      * @final
      */
-    public function setPublic(): static
+    public function setPublic(): object
     {
         $this->headers->addCacheControlDirective('public');
         $this->headers->removeCacheControlDirective('private');
@@ -622,7 +617,7 @@ class Response
      *
      * @final
      */
-    public function setImmutable(bool $immutable = true): static
+    public function setImmutable(bool $immutable = true): object
     {
         if ($immutable) {
             $this->headers->addCacheControlDirective('immutable');
@@ -665,7 +660,7 @@ class Response
      *
      * @final
      */
-    public function getDate(): ?\DateTimeImmutable
+    public function getDate(): ?\DateTimeInterface
     {
         return $this->headers->getDate('Date');
     }
@@ -677,9 +672,12 @@ class Response
      *
      * @final
      */
-    public function setDate(\DateTimeInterface $date): static
+    public function setDate(\DateTimeInterface $date): object
     {
-        $date = \DateTimeImmutable::createFromInterface($date);
+        if ($date instanceof \DateTime) {
+            $date = \DateTimeImmutable::createFromMutable($date);
+        }
+
         $date = $date->setTimezone(new \DateTimeZone('UTC'));
         $this->headers->set('Date', $date->format('D, d M Y H:i:s').' GMT');
 
@@ -705,7 +703,7 @@ class Response
      *
      * @return $this
      */
-    public function expire(): static
+    public function expire()
     {
         if ($this->isFresh()) {
             $this->headers->set('Age', $this->getMaxAge());
@@ -720,13 +718,13 @@ class Response
      *
      * @final
      */
-    public function getExpires(): ?\DateTimeImmutable
+    public function getExpires(): ?\DateTimeInterface
     {
         try {
             return $this->headers->getDate('Expires');
-        } catch (\RuntimeException) {
+        } catch (\RuntimeException $e) {
             // according to RFC 2616 invalid date formats (e.g. "0" and "-1") must be treated as in the past
-            return \DateTimeImmutable::createFromFormat('U', time() - 172800);
+            return \DateTime::createFromFormat('U', time() - 172800);
         }
     }
 
@@ -739,7 +737,7 @@ class Response
      *
      * @final
      */
-    public function setExpires(?\DateTimeInterface $date): static
+    public function setExpires(?\DateTimeInterface $date = null): object
     {
         if (null === $date) {
             $this->headers->remove('Expires');
@@ -747,7 +745,10 @@ class Response
             return $this;
         }
 
-        $date = \DateTimeImmutable::createFromInterface($date);
+        if ($date instanceof \DateTime) {
+            $date = \DateTimeImmutable::createFromMutable($date);
+        }
+
         $date = $date->setTimezone(new \DateTimeZone('UTC'));
         $this->headers->set('Expires', $date->format('D, d M Y H:i:s').' GMT');
 
@@ -785,13 +786,13 @@ class Response
     /**
      * Sets the number of seconds after which the response should no longer be considered fresh.
      *
-     * This method sets the Cache-Control max-age directive.
+     * This methods sets the Cache-Control max-age directive.
      *
      * @return $this
      *
      * @final
      */
-    public function setMaxAge(int $value): static
+    public function setMaxAge(int $value): object
     {
         $this->headers->addCacheControlDirective('max-age', $value);
 
@@ -799,47 +800,15 @@ class Response
     }
 
     /**
-     * Sets the number of seconds after which the response should no longer be returned by shared caches when backend is down.
-     *
-     * This method sets the Cache-Control stale-if-error directive.
-     *
-     * @return $this
-     *
-     * @final
-     */
-    public function setStaleIfError(int $value): static
-    {
-        $this->headers->addCacheControlDirective('stale-if-error', $value);
-
-        return $this;
-    }
-
-    /**
-     * Sets the number of seconds after which the response should no longer return stale content by shared caches.
-     *
-     * This method sets the Cache-Control stale-while-revalidate directive.
-     *
-     * @return $this
-     *
-     * @final
-     */
-    public function setStaleWhileRevalidate(int $value): static
-    {
-        $this->headers->addCacheControlDirective('stale-while-revalidate', $value);
-
-        return $this;
-    }
-
-    /**
      * Sets the number of seconds after which the response should no longer be considered fresh by shared caches.
      *
-     * This method sets the Cache-Control s-maxage directive.
+     * This methods sets the Cache-Control s-maxage directive.
      *
      * @return $this
      *
      * @final
      */
-    public function setSharedMaxAge(int $value): static
+    public function setSharedMaxAge(int $value): object
     {
         $this->setPublic();
         $this->headers->addCacheControlDirective('s-maxage', $value);
@@ -873,7 +842,7 @@ class Response
      *
      * @final
      */
-    public function setTtl(int $seconds): static
+    public function setTtl(int $seconds): object
     {
         $this->setSharedMaxAge($this->getAge() + $seconds);
 
@@ -889,7 +858,7 @@ class Response
      *
      * @final
      */
-    public function setClientTtl(int $seconds): static
+    public function setClientTtl(int $seconds): object
     {
         $this->setMaxAge($this->getAge() + $seconds);
 
@@ -903,7 +872,7 @@ class Response
      *
      * @final
      */
-    public function getLastModified(): ?\DateTimeImmutable
+    public function getLastModified(): ?\DateTimeInterface
     {
         return $this->headers->getDate('Last-Modified');
     }
@@ -917,7 +886,7 @@ class Response
      *
      * @final
      */
-    public function setLastModified(?\DateTimeInterface $date): static
+    public function setLastModified(?\DateTimeInterface $date = null): object
     {
         if (null === $date) {
             $this->headers->remove('Last-Modified');
@@ -925,7 +894,10 @@ class Response
             return $this;
         }
 
-        $date = \DateTimeImmutable::createFromInterface($date);
+        if ($date instanceof \DateTime) {
+            $date = \DateTimeImmutable::createFromMutable($date);
+        }
+
         $date = $date->setTimezone(new \DateTimeZone('UTC'));
         $this->headers->set('Last-Modified', $date->format('D, d M Y H:i:s').' GMT');
 
@@ -952,7 +924,7 @@ class Response
      *
      * @final
      */
-    public function setEtag(?string $etag, bool $weak = false): static
+    public function setEtag(?string $etag = null, bool $weak = false): object
     {
         if (null === $etag) {
             $this->headers->remove('Etag');
@@ -978,10 +950,10 @@ class Response
      *
      * @final
      */
-    public function setCache(array $options): static
+    public function setCache(array $options): object
     {
         if ($diff = array_diff(array_keys($options), array_keys(self::HTTP_RESPONSE_CACHE_CONTROL_DIRECTIVES))) {
-            throw new \InvalidArgumentException(\sprintf('Response does not support the following options: "%s".', implode('", "', $diff)));
+            throw new \InvalidArgumentException(sprintf('Response does not support the following options: "%s".', implode('", "', $diff)));
         }
 
         if (isset($options['etag'])) {
@@ -998,14 +970,6 @@ class Response
 
         if (isset($options['s_maxage'])) {
             $this->setSharedMaxAge($options['s_maxage']);
-        }
-
-        if (isset($options['stale_while_revalidate'])) {
-            $this->setStaleWhileRevalidate($options['stale_while_revalidate']);
-        }
-
-        if (isset($options['stale_if_error'])) {
-            $this->setStaleIfError($options['stale_if_error']);
         }
 
         foreach (self::HTTP_RESPONSE_CACHE_CONTROL_DIRECTIVES as $directive => $hasValue) {
@@ -1049,7 +1013,7 @@ class Response
      *
      * @final
      */
-    public function setNotModified(): static
+    public function setNotModified(): object
     {
         $this->setStatusCode(304);
         $this->setContent(null);
@@ -1094,13 +1058,14 @@ class Response
     /**
      * Sets the Vary header.
      *
-     * @param bool $replace Whether to replace the actual value or not (true by default)
+     * @param string|array $headers
+     * @param bool         $replace Whether to replace the actual value or not (true by default)
      *
      * @return $this
      *
      * @final
      */
-    public function setVary(string|array $headers, bool $replace = true): static
+    public function setVary($headers, bool $replace = true): object
     {
         $this->headers->set('Vary', $headers, $replace);
 
@@ -1254,7 +1219,7 @@ class Response
      */
     public function isRedirect(?string $location = null): bool
     {
-        return \in_array($this->statusCode, [201, 301, 302, 303, 307, 308], true) && (null === $location ?: $location == $this->headers->get('Location'));
+        return \in_array($this->statusCode, [201, 301, 302, 303, 307, 308]) && (null === $location ?: $location == $this->headers->get('Location'));
     }
 
     /**
@@ -1264,7 +1229,7 @@ class Response
      */
     public function isEmpty(): bool
     {
-        return \in_array($this->statusCode, [204, 304], true);
+        return \in_array($this->statusCode, [204, 304]);
     }
 
     /**

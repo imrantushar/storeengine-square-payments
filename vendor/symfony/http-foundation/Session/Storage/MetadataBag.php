@@ -26,24 +26,47 @@ class MetadataBag implements SessionBagInterface
     public const UPDATED = 'u';
     public const LIFETIME = 'l';
 
-    protected array $meta = [self::CREATED => 0, self::UPDATED => 0, self::LIFETIME => 0];
-
-    private string $name = '__metadata';
-    private int $lastUsed;
+    /**
+     * @var string
+     */
+    private $name = '__metadata';
 
     /**
-     * @param string   $storageKey      The key used to store bag in the session
-     * @param int      $updateThreshold The time to wait between two UPDATED updates
-     * @param int|null $cookieLifetime  The configured cookie lifetime; null to read from php.ini
+     * @var string
      */
-    public function __construct(
-        private string $storageKey = '_sf2_meta',
-        private int $updateThreshold = 0,
-        private ?int $cookieLifetime = null,
-    ) {
+    private $storageKey;
+
+    /**
+     * @var array
+     */
+    protected $meta = [self::CREATED => 0, self::UPDATED => 0, self::LIFETIME => 0];
+
+    /**
+     * Unix timestamp.
+     *
+     * @var int
+     */
+    private $lastUsed;
+
+    /**
+     * @var int
+     */
+    private $updateThreshold;
+
+    /**
+     * @param string $storageKey      The key used to store bag in the session
+     * @param int    $updateThreshold The time to wait between two UPDATED updates
+     */
+    public function __construct(string $storageKey = '_sf2_meta', int $updateThreshold = 0)
+    {
+        $this->storageKey = $storageKey;
+        $this->updateThreshold = $updateThreshold;
     }
 
-    public function initialize(array &$array): void
+    /**
+     * {@inheritdoc}
+     */
+    public function initialize(array &$array)
     {
         $this->meta = &$array;
 
@@ -61,8 +84,10 @@ class MetadataBag implements SessionBagInterface
 
     /**
      * Gets the lifetime that the session cookie was set with.
+     *
+     * @return int
      */
-    public function getLifetime(): int
+    public function getLifetime()
     {
         return $this->meta[self::LIFETIME];
     }
@@ -75,12 +100,15 @@ class MetadataBag implements SessionBagInterface
      *                           to expire with browser session. Time is in seconds, and is
      *                           not a Unix timestamp.
      */
-    public function stampNew(?int $lifetime = null): void
+    public function stampNew(?int $lifetime = null)
     {
         $this->stampCreated($lifetime);
     }
 
-    public function getStorageKey(): string
+    /**
+     * {@inheritdoc}
+     */
+    public function getStorageKey()
     {
         return $this->storageKey;
     }
@@ -90,7 +118,7 @@ class MetadataBag implements SessionBagInterface
      *
      * @return int Unix timestamp
      */
-    public function getCreated(): int
+    public function getCreated()
     {
         return $this->meta[self::CREATED];
     }
@@ -100,18 +128,24 @@ class MetadataBag implements SessionBagInterface
      *
      * @return int Unix timestamp
      */
-    public function getLastUsed(): int
+    public function getLastUsed()
     {
         return $this->lastUsed;
     }
 
-    public function clear(): mixed
+    /**
+     * {@inheritdoc}
+     */
+    public function clear()
     {
         // nothing to do
         return null;
     }
 
-    public function getName(): string
+    /**
+     * {@inheritdoc}
+     */
+    public function getName()
     {
         return $this->name;
     }
@@ -119,7 +153,7 @@ class MetadataBag implements SessionBagInterface
     /**
      * Sets name.
      */
-    public function setName(string $name): void
+    public function setName(string $name)
     {
         $this->name = $name;
     }
@@ -128,6 +162,6 @@ class MetadataBag implements SessionBagInterface
     {
         $timeStamp = time();
         $this->meta[self::CREATED] = $this->meta[self::UPDATED] = $this->lastUsed = $timeStamp;
-        $this->meta[self::LIFETIME] = $lifetime ?? $this->cookieLifetime ?? (int) \ini_get('session.cookie_lifetime');
+        $this->meta[self::LIFETIME] = $lifetime ?? (int) \ini_get('session.cookie_lifetime');
     }
 }

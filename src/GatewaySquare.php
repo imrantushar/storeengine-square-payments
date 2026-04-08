@@ -13,8 +13,8 @@
 
 namespace StoreEngineSquare;
 
-use Square\Types\Card;
-use Square\Types\Payment;
+use Square\Models\Card;
+use Square\Models\Payment;
 use StoreEngine\Addons\Subscription\Classes\SubscriptionCollection;
 use StoreEngine\Classes\Exceptions\StoreEngineException;
 use StoreEngine\Classes\Exceptions\StoreEngineInvalidOrderStatusException;
@@ -310,7 +310,7 @@ class GatewaySquare extends PaymentGateway {
 			// Force the save checkbox when the cart contains a subscription or
 			// installment — the customer must save their card so renewals can
 			// be charged automatically without browser interaction.
-			$this->save_payment_method_checkbox( $this->should_force_save_payment() );
+			$this->save_payment_method_checkbox( $this->maybe_force_save_payment() );
 		}
 		ob_end_flush();
 	}
@@ -347,7 +347,7 @@ class GatewaySquare extends PaymentGateway {
 	 * @return array|WP_Error  ['result' => 'success', 'redirect' => url] on success.
 	 * @throws StoreEngineException
 	 */
-	public function process_payment( Order $order ): array|WP_Error {
+	public function process_payment( Order $order ) {
 		$this->validate_minimum_order_amount( $order );
 
 		$service       = SquareService::init( $this );
@@ -362,7 +362,7 @@ class GatewaySquare extends PaymentGateway {
 		// Subscriptions and installments MUST save the card so that StoreEngine's
 		// scheduler can charge it off-session on every renewal.
 		$has_subscription = Helper::cart() && Helper::cart()->get_meta( 'has_subscription' );
-		if ( $has_subscription || $this->should_force_save_payment() ) {
+		if ( $has_subscription || $this->maybe_force_save_payment() ) {
 			$save_card = true;
 		}
 
@@ -467,12 +467,17 @@ class GatewaySquare extends PaymentGateway {
 			}
 
 			// ── Record payment data on the order ───────────────────────────────
-			$payment_id  = (string) $square_payment->getId();
-			$receipt_url = (string) $square_payment->getReceiptUrl();
-			$card_brand  = (string) ( $square_payment->getCardDetails()?->getCard()?->getCardBrand() ?? '' );
-			$last4       = (string) ( $square_payment->getCardDetails()?->getCard()?->getLast4() ?? '' );
-			$fee_amount  = (int) ( $square_payment->getProcessingFee()[0]?->getAmountMoney()?->getAmount() ?? 0 );
-			$sq_customer = (string) $square_payment->getCustomerId();
+			$payment_id      = (string) $square_payment->getId();
+			$receipt_url     = (string) $square_payment->getReceiptUrl();
+			$card_details    = $square_payment->getCardDetails();
+			$card            = $card_details ? $card_details->getCard() : null;
+			$card_brand      = (string) ( $card ? $card->getCardBrand() : '' );
+			$last4           = (string) ( $card ? $card->getLast4() : '' );
+			$processing_fees = $square_payment->getProcessingFee();
+			$first_fee       = isset( $processing_fees[0] ) ? $processing_fees[0] : null;
+			$fee_money       = $first_fee ? $first_fee->getAmountMoney() : null;
+			$fee_amount      = (int) ( $fee_money ? $fee_money->getAmount() : 0 );
+			$sq_customer     = (string) $square_payment->getCustomerId();
 
 			$order->set_transaction_id( $payment_id );
 			$order->set_paid_status( 'paid' );
@@ -585,7 +590,7 @@ class GatewaySquare extends PaymentGateway {
 	 *
 	 * @return bool|WP_Error
 	 */
-	public function process_refund( int $order_id, $amount = null, string $reason = '' ): bool|WP_Error {
+	public function process_refund( int $order_id, $amount = null, string $reason = '' ) {
 		$order = Helper::get_order( $order_id );
 
 		if ( is_wp_error( $order ) || ! $order instanceof Order ) {
@@ -767,9 +772,11 @@ class GatewaySquare extends PaymentGateway {
 	 * When forced, the checkbox is pre-checked and the customer cannot uncheck it —
 	 * a saved card is required for automatic renewals.
 	 *
+     * @param Order $order *
+     *
 	 * @return bool
 	 */
-	private function should_force_save_payment(): bool {
+	public function should_force_save_payment( Order $order): bool {
 		if ( Helper::is_add_payment_method_page() ) {
 			return true;
 		}
@@ -919,11 +926,16 @@ class GatewaySquare extends PaymentGateway {
 			}
 
 			// ── Record the result on the renewal order ────────────────────────
-			$payment_id  = (string) $square_payment->getId();
-			$receipt_url = (string) $square_payment->getReceiptUrl();
-			$card_brand  = (string) ( $square_payment->getCardDetails()?->getCard()?->getCardBrand() ?? '' );
-			$last4       = (string) ( $square_payment->getCardDetails()?->getCard()?->getLast4() ?? '' );
-			$fee_amount  = (int) ( $square_payment->getProcessingFee()[0]?->getAmountMoney()?->getAmount() ?? 0 );
+			$payment_id      = (string) $square_payment->getId();
+			$receipt_url     = (string) $square_payment->getReceiptUrl();
+			$card_details    = $square_payment->getCardDetails();
+			$card            = $card_details ? $card_details->getCard() : null;
+			$card_brand      = (string) ( $card ? $card->getCardBrand() : '' );
+			$last4           = (string) ( $card ? $card->getLast4() : '' );
+			$processing_fees = $square_payment->getProcessingFee();
+			$first_fee       = isset( $processing_fees[0] ) ? $processing_fees[0] : null;
+			$fee_money       = $first_fee ? $first_fee->getAmountMoney() : null;
+			$fee_amount      = (int) ( $fee_money ? $fee_money->getAmount() : 0 );
 
 			$renewal_order->set_transaction_id( $payment_id );
 			$renewal_order->set_paid_status( 'paid' );

@@ -41,6 +41,27 @@ class Assets {
 			true
 		);
 
+		// ── Localhost / HTTP dev bypass ───────────────────────────────────────
+		// Square's SDK refuses to initialise on non-HTTPS origins.
+		// When SQUARE_ALLOW_HTTP is defined (or WP_DEBUG is on) and the current
+		// request is NOT over SSL we patch window.isSecureContext to true on
+		// Window.prototype before the SDK script runs.
+		//
+		// Add this to wp-config.php for local development:
+		//   define( 'SQUARE_ALLOW_HTTP', true );
+		//
+		// This patch is NEVER applied on HTTPS or in production environments.
+		$allow_http = ( defined( 'SQUARE_ALLOW_HTTP' ) && SQUARE_ALLOW_HTTP )
+		              || ( defined( 'WP_DEBUG' ) && WP_DEBUG );
+
+		if ( ! is_ssl() && $allow_http ) {
+			wp_add_inline_script(
+				'square-web-payments-sdk',
+				'(function(){try{Object.defineProperty(Window.prototype,"isSecureContext",{get:function(){return true;},configurable:true,enumerable:true});}catch(e){}})();',
+				'before'
+			);
+		}
+
 		$dependencies = include_once SE_SQUARE_DIR . 'assets/build/payments.asset.php';
 		wp_enqueue_script(
 			'storeengine-square-checkout',
