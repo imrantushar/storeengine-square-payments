@@ -950,6 +950,15 @@ class GatewaySquare extends PaymentGateway {
 			// Keep subscription's card meta up-to-date.
 			$this->maybe_update_source_on_subscription_order( $renewal_order, $customer_id, $card_id );
 
+            $order_context->proceed_to_next_status( 'process_order', $renewal_order, [
+                    'note'           => sprintf(
+                    // translators: %s. Square PaymentId.
+                            __( 'Square payment complete (Payment ID: %s).', 'storeengine-square' ),
+                            $payment_id
+                    ),
+                    'transaction_id' => $payment_id,
+            ] );
+
 			$order_context->proceed_to_next_status(
 				Completed::STATUS,
 				$renewal_order,
