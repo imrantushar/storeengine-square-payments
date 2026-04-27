@@ -8,16 +8,12 @@ $baseDir = dirname($vendorDir);
 return array(
     'apimatic\\jsonmapper\\' => array($vendorDir . '/apimatic/jsonmapper/src'),
     'Unirest\\' => array($vendorDir . '/apimatic/unirest-php/src'),
+    'Symfony\\Polyfill\\Php80\\' => array($vendorDir . '/symfony/polyfill-php80'),
     'Symfony\\Polyfill\\Mbstring\\' => array($vendorDir . '/symfony/polyfill-mbstring'),
     'Symfony\\Component\\HttpFoundation\\' => array($vendorDir . '/symfony/http-foundation'),
     'StoreEngineSquare\\' => array($baseDir . '/src'),
     'Square\\' => array($vendorDir . '/square/square/src'),
-    'Psr\\Log\\' => array($vendorDir . '/psr/log/src'),
-    'Psr\\Http\\Message\\' => array($vendorDir . '/psr/http-factory/src', $vendorDir . '/psr/http-message/src'),
-    'Psr\\Http\\Client\\' => array($vendorDir . '/psr/http-client/src'),
-    'GuzzleHttp\\Psr7\\' => array($vendorDir . '/guzzlehttp/psr7/src'),
-    'GuzzleHttp\\Promise\\' => array($vendorDir . '/guzzlehttp/promises/src'),
-    'GuzzleHttp\\' => array($vendorDir . '/guzzlehttp/guzzle/src'),
+    'Psr\\Log\\' => array($vendorDir . '/psr/log/Psr/Log'),
     'Core\\' => array($vendorDir . '/apimatic/core/src'),
     'CoreInterfaces\\' => array($vendorDir . '/apimatic/core-interfaces/src'),
 );

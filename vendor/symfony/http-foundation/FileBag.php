@@ -21,7 +21,7 @@ use Symfony\Component\HttpFoundation\File\UploadedFile;
  */
 class FileBag extends ParameterBag
 {
-    private const FILE_KEYS = ['error', 'full_path', 'name', 'size', 'tmp_name', 'type'];
+    private const FILE_KEYS = ['error', 'name', 'size', 'tmp_name', 'type'];
 
     /**
      * @param array|UploadedFile[] $parameters An array of HTTP files
@@ -31,13 +31,19 @@ class FileBag extends ParameterBag
         $this->replace($parameters);
     }
 
-    public function replace(array $files = []): void
+    /**
+     * {@inheritdoc}
+     */
+    public function replace(array $files = [])
     {
         $this->parameters = [];
         $this->add($files);
     }
 
-    public function set(string $key, mixed $value): void
+    /**
+     * {@inheritdoc}
+     */
+    public function set(string $key, $value)
     {
         if (!\is_array($value) && !$value instanceof UploadedFile) {
             throw new \InvalidArgumentException('An uploaded file must be an array or an instance of UploadedFile.');
@@ -46,7 +52,10 @@ class FileBag extends ParameterBag
         parent::set($key, $this->convertFileInformation($value));
     }
 
-    public function add(array $files = []): void
+    /**
+     * {@inheritdoc}
+     */
+    public function add(array $files = [])
     {
         foreach ($files as $key => $file) {
             $this->set($key, $file);
@@ -56,27 +65,29 @@ class FileBag extends ParameterBag
     /**
      * Converts uploaded files to UploadedFile instances.
      *
+     * @param array|UploadedFile $file A (multi-dimensional) array of uploaded file information
+     *
      * @return UploadedFile[]|UploadedFile|null
      */
-    protected function convertFileInformation(array|UploadedFile $file): array|UploadedFile|null
+    protected function convertFileInformation($file)
     {
         if ($file instanceof UploadedFile) {
             return $file;
         }
 
         $file = $this->fixPhpFilesArray($file);
-        $keys = array_keys($file + ['full_path' => null]);
+        $keys = array_keys($file);
         sort($keys);
 
-        if (self::FILE_KEYS === $keys) {
-            if (\UPLOAD_ERR_NO_FILE === $file['error']) {
+        if (self::FILE_KEYS == $keys) {
+            if (\UPLOAD_ERR_NO_FILE == $file['error']) {
                 $file = null;
             } else {
-                $file = new UploadedFile($file['tmp_name'], $file['full_path'] ?? $file['name'], $file['type'], $file['error'], false);
+                $file = new UploadedFile($file['tmp_name'], $file['name'], $file['type'], $file['error'], false);
             }
         } else {
-            $file = array_map(fn ($v) => $v instanceof UploadedFile || \is_array($v) ? $this->convertFileInformation($v) : $v, $file);
-            if (array_is_list($file)) {
+            $file = array_map(function ($v) { return $v instanceof UploadedFile || \is_array($v) ? $this->convertFileInformation($v) : $v; }, $file);
+            if (array_keys($keys) === $keys) {
                 $file = array_filter($file);
             }
         }
@@ -95,13 +106,17 @@ class FileBag extends ParameterBag
      *
      * It's safe to pass an already converted array, in which case this method
      * just returns the original array unmodified.
+     *
+     * @return array
      */
-    protected function fixPhpFilesArray(array $data): array
+    protected function fixPhpFilesArray(array $data)
     {
-        $keys = array_keys($data + ['full_path' => null]);
+        // Remove extra key added by PHP 8.1.
+        unset($data['full_path']);
+        $keys = array_keys($data);
         sort($keys);
 
-        if (self::FILE_KEYS !== $keys || !isset($data['name']) || !\is_array($data['name'])) {
+        if (self::FILE_KEYS != $keys || !isset($data['name']) || !\is_array($data['name'])) {
             return $data;
         }
 
@@ -117,9 +132,7 @@ class FileBag extends ParameterBag
                 'type' => $data['type'][$key],
                 'tmp_name' => $data['tmp_name'][$key],
                 'size' => $data['size'][$key],
-            ] + (isset($data['full_path'][$key]) ? [
-                'full_path' => $data['full_path'][$key],
-            ] : []));
+            ]);
         }
 
         return $files;

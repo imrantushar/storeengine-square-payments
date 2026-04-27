@@ -13,8 +13,8 @@
 
 namespace StoreEngineSquare;
 
-use Square\Types\Card;
-use Square\Types\Payment;
+use Square\Models\Card;
+use Square\Models\Payment;
 use StoreEngine\Addons\Subscription\Classes\SubscriptionCollection;
 use StoreEngine\Classes\Exceptions\StoreEngineException;
 use StoreEngine\Classes\Exceptions\StoreEngineInvalidOrderStatusException;
@@ -345,7 +345,7 @@ class GatewaySquare extends PaymentGateway {
 	 * @return array|WP_Error  ['result' => 'success', 'redirect' => url] on success.
 	 * @throws StoreEngineException
 	 */
-	public function process_payment( Order $order ): array|WP_Error {
+	public function process_payment( Order $order ) {
 		$this->validate_minimum_order_amount( $order );
 
 		$service       = SquareService::init( $this );
@@ -357,6 +357,13 @@ class GatewaySquare extends PaymentGateway {
 		// phpcs:enable WordPress.Security.NonceVerification.Missing
 
 		$save_card = $this->should_force_save_payment( $order );
+		
+    // Subscriptions and installments MUST save the card so that StoreEngine's
+		// scheduler can charge it off-session on every renewal.
+		$has_subscription = Helper::cart() && Helper::cart()->get_meta( 'has_subscription' );
+		if ( $has_subscription || $this->maybe_force_save_payment() ) {
+			$save_card = true;
+		}
 
 		// Tracks which path was taken so the card-save block below behaves correctly:
 		//   Path A (saved token)  → $using_saved = true,  card_id = token itself (ccof:…)
@@ -459,12 +466,17 @@ class GatewaySquare extends PaymentGateway {
 			}
 
 			// ── Record payment data on the order ───────────────────────────────
-			$payment_id  = (string) $square_payment->getId();
-			$receipt_url = (string) $square_payment->getReceiptUrl();
-			$card_brand  = (string) ( $square_payment->getCardDetails()?->getCard()?->getCardBrand() ?? '' );
-			$last4       = (string) ( $square_payment->getCardDetails()?->getCard()?->getLast4() ?? '' );
-			$fee_amount  = (int) ( $square_payment->getProcessingFee()[0]?->getAmountMoney()?->getAmount() ?? 0 );
-			$sq_customer = (string) $square_payment->getCustomerId();
+			$payment_id      = (string) $square_payment->getId();
+			$receipt_url     = (string) $square_payment->getReceiptUrl();
+			$card_details    = $square_payment->getCardDetails();
+			$card            = $card_details ? $card_details->getCard() : null;
+			$card_brand      = (string) ( $card ? $card->getCardBrand() : '' );
+			$last4           = (string) ( $card ? $card->getLast4() : '' );
+			$processing_fees = $square_payment->getProcessingFee();
+			$first_fee       = isset( $processing_fees[0] ) ? $processing_fees[0] : null;
+			$fee_money       = $first_fee ? $first_fee->getAmountMoney() : null;
+			$fee_amount      = (int) ( $fee_money ? $fee_money->getAmount() : 0 );
+			$sq_customer     = (string) $square_payment->getCustomerId();
 
 			$order->set_transaction_id( $payment_id );
 			$order->set_paid_status( 'paid' );
@@ -577,7 +589,7 @@ class GatewaySquare extends PaymentGateway {
 	 *
 	 * @return bool|WP_Error
 	 */
-	public function process_refund( int $order_id, $amount = null, string $reason = '' ): bool|WP_Error {
+	public function process_refund( int $order_id, $amount = null, string $reason = '' ) {
 		$order = Helper::get_order( $order_id );
 
 		if ( is_wp_error( $order ) || ! $order instanceof Order ) {
@@ -750,6 +762,31 @@ class GatewaySquare extends PaymentGateway {
 	// ── Subscription & installment support ───────────────────────────────────────
 
 	/**
+	 * Determine whether to force the "save payment method" checkbox on.
+	 *
+	 * Returns true when:
+	 *   - We are on the "Add Payment Method" page (always save)
+	 *   - The cart contains a subscription or installment plan
+	 *
+	 * When forced, the checkbox is pre-checked and the customer cannot uncheck it —
+	 * a saved card is required for automatic renewals.
+	 *
+     * @param Order $order *
+     *
+	 * @return bool
+	 */
+	public function should_force_save_payment( Order $order): bool {
+		if ( Helper::is_add_payment_method_page() ) {
+			return true;
+		}
+
+		return (bool) apply_filters(
+			'storeengine/square/force_save_payment_method',
+			Helper::cart() && Helper::cart()->get_meta( 'has_subscription' )
+		);
+	}
+
+	/**
 	 * Copy Square customer ID and card (source) ID onto all subscriptions linked
 	 * to the given order.
 	 *
@@ -888,11 +925,16 @@ class GatewaySquare extends PaymentGateway {
 			}
 
 			// ── Record the result on the renewal order ────────────────────────
-			$payment_id  = (string) $square_payment->getId();
-			$receipt_url = (string) $square_payment->getReceiptUrl();
-			$card_brand  = (string) ( $square_payment->getCardDetails()?->getCard()?->getCardBrand() ?? '' );
-			$last4       = (string) ( $square_payment->getCardDetails()?->getCard()?->getLast4() ?? '' );
-			$fee_amount  = (int) ( $square_payment->getProcessingFee()[0]?->getAmountMoney()?->getAmount() ?? 0 );
+			$payment_id      = (string) $square_payment->getId();
+			$receipt_url     = (string) $square_payment->getReceiptUrl();
+			$card_details    = $square_payment->getCardDetails();
+			$card            = $card_details ? $card_details->getCard() : null;
+			$card_brand      = (string) ( $card ? $card->getCardBrand() : '' );
+			$last4           = (string) ( $card ? $card->getLast4() : '' );
+			$processing_fees = $square_payment->getProcessingFee();
+			$first_fee       = isset( $processing_fees[0] ) ? $processing_fees[0] : null;
+			$fee_money       = $first_fee ? $first_fee->getAmountMoney() : null;
+			$fee_amount      = (int) ( $fee_money ? $fee_money->getAmount() : 0 );
 
 			$renewal_order->set_transaction_id( $payment_id );
 			$renewal_order->set_paid_status( 'paid' );
@@ -906,6 +948,15 @@ class GatewaySquare extends PaymentGateway {
 
 			// Keep subscription's card meta up-to-date.
 			$this->maybe_update_source_on_subscription_order( $renewal_order, $customer_id, $card_id );
+
+            $order_context->proceed_to_next_status( 'process_order', $renewal_order, [
+                    'note'           => sprintf(
+                    // translators: %s. Square PaymentId.
+                            __( 'Square payment complete (Payment ID: %s).', 'storeengine-square' ),
+                            $payment_id
+                    ),
+                    'transaction_id' => $payment_id,
+            ] );
 
 			$order_context->proceed_to_next_status(
 				Completed::STATUS,
