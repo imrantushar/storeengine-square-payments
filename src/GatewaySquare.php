@@ -659,9 +659,7 @@ class GatewaySquare extends PaymentGateway {
 			);
 		}
 
-		$source_id = sanitize_text_field( $payload['square_payment_token'] ?? '' );
-
-		if ( ! $source_id ) {
+		if ( empty( $payload['square_payment_token'] ) ) {
 			throw new StoreEngineException(
 				esc_html__( 'Square payment token is missing.', 'storeengine-square' ),
 				'square-nonce-missing',
@@ -679,10 +677,10 @@ class GatewaySquare extends PaymentGateway {
 			trim( $user->first_name . ' ' . $user->last_name )
 		);
 
-		$idem_key = $service->generate_idempotency_key( 'add_card_' . $user->ID . '_' . $source_id );
+		$idem_key = $service->generate_idempotency_key( 'add_card_' . $user->ID . '_' . $payload['square_payment_token'] );
 
 		/** @var Card $card  Square Card SDK object */
-		$card = $service->create_card( $customer_id, $source_id, $idem_key );
+		$card = $service->create_card( $customer_id, $payload['square_payment_token'], $idem_key );
 
 		if ( ! $card->getId() ) {
 			throw new StoreEngineException(

@@ -29,12 +29,9 @@
  *   wp.hooks.addAction('storeengine.square.after_tokenize', 'my-plugin', async (token) => {});
  */
 
-import { __ } from '@wordpress/i18n';
-import { applyFilters, doAction, doActionAsync } from '@wordpress/hooks';
-import {
-	getSeGlobal,
-	renderErrorNotification,
-} from '@Utils/helper';
+import {__} from '@wordpress/i18n';
+import {addAction, applyFilters, doAction, doActionAsync} from '@wordpress/hooks';
+import {getSeGlobal, handleRedirectResponse, makeRequest2, notification, renderErrorNotification} from '@Utils/helper';
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -240,7 +237,48 @@ export function initSquareGateway() {
 
 // ─── Entrypoint ───────────────────────────────────────────────────────────────
 
+let SQUARE_PAYMENTS;
+
+addAction( 'storeengine.add-payment-method.init-form', 'square-on-init-add-payment-method-form', async function() {
+	// const STRIPE_API = getStripeAPI();
+	// await maybeMountPaymentElement( STRIPE_API, 'setup' );
+	clearError();
+	const SQUARE_PAYMENTS = await getOrInitPayments();
+	await mountCardWidget( SQUARE_PAYMENTS );
+} );
+
+addAction( 'storeengine.add-payment-method.select-payment-method', 'square-on-select-payment-method', async function( method ) {
+	if ( 'square' !== method ) {
+		return;
+	}
+	clearError();
+	const SQUARE_PAYMENTS = await getOrInitPayments();
+	await mountCardWidget( SQUARE_PAYMENTS );
+} );
+
+addAction( 'storeengine.add-payment-method.save-payment-method', 'square-on-save-payment-method', async function( method, form ) {
+	if ( 'square' !== method || ! squareState || ! squareState.card ) {
+		return;
+	}
+
+	const result = await squareState.card.tokenize();
+
+	if ( result.status !== 'OK' ) {
+		const errors  = result.errors ?? [];
+		const message = errors.map( ( e ) => e.message ).join( ' ' ) || __( 'Card tokenization failed. Please check your card details.', 'storeengine-square' );
+		throw new Error( message );
+	}
+
+	const response = await makeRequest2( 'payment_method/square/save-card', {square_payment_token: result.token} );
+
+	if ( response.message ) {
+		await notification( response.message, response.found ? 'info' : 'success', 3500 );
+	}
+	await handleRedirectResponse( response, 850 );
+}, 10, 2 );
+
 document.addEventListener( 'DOMContentLoaded', () => {
-	if ( ! window.StoreEngineCheckout ) return;
-	initSquareGateway();
+	if ( window.StoreEngineCheckout ) {
+		initSquareGateway();
+	}
 } );
