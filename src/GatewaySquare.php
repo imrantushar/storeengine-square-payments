@@ -19,18 +19,15 @@ use StoreEngine\Addons\Subscription\Classes\SubscriptionCollection;
 use StoreEngine\Classes\Exceptions\StoreEngineException;
 use StoreEngine\Classes\Exceptions\StoreEngineInvalidOrderStatusException;
 use StoreEngine\Classes\Exceptions\StoreEngineInvalidOrderStatusTransitionException;
-use StoreEngine\Classes\OrderStatus\Completed;
 use StoreEngine\Classes\Order;
 use StoreEngine\Classes\OrderContext;
+use StoreEngine\Classes\OrderStatus\Completed;
 use StoreEngine\Classes\OrderStatus\OrderStatus;
 use StoreEngine\Classes\PaymentTokens\PaymentToken;
 use StoreEngine\Classes\PaymentTokens\PaymentTokens;
 use StoreEngine\Payment\Gateways\PaymentGateway;
 use StoreEngine\Utils\Formatting;
 use StoreEngine\Utils\Helper;
-use StoreEngineSquare\SquarePaymentTokenCc;
-use StoreEngineSquare\SquarePaymentTokens;
-use StoreEngineSquare\SquareService;
 use Throwable;
 use WP_Error;
 
@@ -53,6 +50,7 @@ class GatewaySquare extends PaymentGateway {
 
 		// Registers both subscription and installment-plan scheduled payment hooks.
 		$this->register_subscription_hooks();
+		$this->tokenization_script();
 	}
 
 	// ── Setup ─────────────────────────────────────────────────────────────────
@@ -61,7 +59,7 @@ class GatewaySquare extends PaymentGateway {
 		$this->id                 = 'square';
 		$this->icon               = apply_filters(
 			'storeengine/square_icon',
-			SE_SQUARE_URL . 'assets/images/square.svg'
+			SE_SQUARE_URL . 'assets/images/squareup.svg'
 		);
 		$this->method_title       = __( 'Square', 'storeengine-square' );
 		$this->method_description = __( 'Accept payments securely via Square Web Payments SDK. Card data never touches your server.', 'storeengine-square' );
@@ -272,9 +270,6 @@ class GatewaySquare extends PaymentGateway {
 
 	public function payment_fields(): void {
 		$description          = (string) $this->get_description();
-		$display_tokenization = $this->supports( 'tokenization' )
-			&& Helper::is_checkout()
-			&& $this->is_saved_cards_enabled();
 
 		// Add sandbox notice.
 		if ( ! $this->get_option( 'is_production', false ) ) {
@@ -293,8 +288,7 @@ class GatewaySquare extends PaymentGateway {
 			<?php echo wpautop( wptexturize( $description ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
 		</div>
 		<?php
-		if ( $display_tokenization ) {
-			$this->tokenization_script();
+		if ( $this->maybe_display_tokenization() ) {
 			$this->saved_payment_methods();
 		}
 		?>
@@ -306,12 +300,13 @@ class GatewaySquare extends PaymentGateway {
 			<div id="storeengine-square-card-errors" class="storeengine-square-errors" role="alert"></div>
 		</fieldset>
 		<?php
-		if ( $display_tokenization ) {
+		if ( $this->is_saved_cards_enabled() ) {
 			// Force the save checkbox when the cart contains a subscription or
 			// installment — the customer must save their card so renewals can
 			// be charged automatically without browser interaction.
 			$this->save_payment_method_checkbox( $this->maybe_force_save_payment() );
 		}
+
 		ob_end_flush();
 	}
 
@@ -356,8 +351,9 @@ class GatewaySquare extends PaymentGateway {
 		// phpcs:disable WordPress.Security.NonceVerification.Missing
 		$source_id      = sanitize_text_field( wp_unslash( $_POST['square_payment_token'] ?? '' ) );
 		$selected_token = $this->get_selected_token_from_request();
-		$save_card      = (bool) $this->maybe_user_request_saved_payment_method();
 		// phpcs:enable WordPress.Security.NonceVerification.Missing
+
+		$save_card = $this->should_force_save_payment( $order );
 
 		// Subscriptions and installments MUST save the card so that StoreEngine's
 		// scheduler can charge it off-session on every renewal.
