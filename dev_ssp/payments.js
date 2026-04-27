@@ -31,12 +31,20 @@
 
 import {__} from '@wordpress/i18n';
 import {addAction, applyFilters, doAction, doActionAsync} from '@wordpress/hooks';
-import {getSeGlobal, handleRedirectResponse, makeRequest2, notification, renderErrorNotification} from '@Utils/helper';
+import {
+	getSeGlobal,
+	handleRedirectResponse,
+	makeRequest2,
+	notification,
+	renderErrorNotification,
+	StoreEngineDQ,
+} from '@Utils/helper';
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
 /** @type {{ payments: any, card: any } | null} */
 let squareState = null;
+let SQUARE_API = null;
 
 /**
  * Mount promise — shared singleton across all concurrent callers.
@@ -62,8 +70,7 @@ let mountPromise = null;
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function clearError() {
-	const el = document.getElementById( 'storeengine-square-card-errors' );
-	if ( el ) { el.textContent = ''; el.style.display = 'none'; }
+	StoreEngineDQ( '#storeengine-square-card-errors' ).hide().text('');
 }
 
 /**
@@ -88,14 +95,20 @@ function getSelectedSavedToken() {
 
 // ─── Square SDK init ──────────────────────────────────────────────────────────
 
+/**
+ * SquareUpConfig
+ * @returns {SquareUpConfig}
+ */
+const getConfig = () => getSeGlobal( 'payment_gateways.square', {application_id: null, is_sandbox: false, location_id: null} );
+
 async function getOrInitPayments() {
-	if ( squareState?.payments ) return squareState.payments;
+	if ( SQUARE_API ) return SQUARE_API;
 
 	if ( ! window.Square ) {
 		throw new Error( __( 'Square Web Payments SDK is not loaded.', 'storeengine-square' ) );
 	}
 
-	const config = getSeGlobal( 'payment_gateways.square', {} );
+	const config = getConfig();
 
 	if ( ! config.application_id || ! config.location_id ) {
 		throw new Error( __( 'Square is not configured. Please contact the site administrator.', 'storeengine-square' ) );
@@ -104,20 +117,16 @@ async function getOrInitPayments() {
 	const appIdIsSandbox = config.application_id.startsWith( 'sandbox-' );
 
 	if ( config.is_sandbox && ! appIdIsSandbox ) {
-		throw new Error(
-			__( 'Square configuration error: is_sandbox is true but the Application ID does not start with "sandbox-". Check your gateway settings.', 'storeengine-square' )
-		);
+		throw new Error( __( 'Square configuration error: invalid “Application ID”.', 'storeengine-square' ) );
 	}
 
 	if ( ! config.is_sandbox && appIdIsSandbox ) {
-		throw new Error(
-			__( 'Square configuration error: Live Mode is enabled but a sandbox Application ID is configured. Update your Application ID to a production key.', 'storeengine-square' )
-		);
+		throw new Error( __( 'Square configuration error: invalid “Application ID”.', 'storeengine-square' ) );
 	}
 
-	const payments = window.Square.payments( config.application_id, config.location_id );
-	squareState    = { payments, card: null };
-	return payments;
+	SQUARE_API = window.Square.payments( config.application_id, config.location_id );
+
+	return SQUARE_API;
 }
 
 // ─── Card widget ──────────────────────────────────────────────────────────────
@@ -133,31 +142,31 @@ async function getOrInitPayments() {
  * @param {any} payments  Square Payments instance.
  * @return {Promise<void>}
  */
-function mountCardWidget( payments ) {
-	if ( mountPromise ) return mountPromise;
-
-	mountPromise = ( async () => {
-		const container = document.getElementById( 'storeengine-square-card-element' );
-		if ( ! container ) return;
-
-		const options = applyFilters( 'storeengine.square.card_options', {
-			style: {
-				'.input-container':          { borderColor: '#ddd', borderRadius: '4px' },
-				'.input-container.is-focus': { borderColor: '#1a56db' },
-				'.input-container.is-error': { borderColor: '#dc2626' },
-			},
-		} );
-
-		if ( ! squareState.card ) {
-			squareState.card = await payments.card( options );
-		}
-
-		await squareState.card.attach( '#storeengine-square-card-element' );
-		doAction( 'storeengine.square.card_mounted', squareState.card );
-	} )();
-
-	return mountPromise;
-}
+// function mountCardWidget( payments ) {
+// 	if ( mountPromise ) return mountPromise;
+//
+// 	mountPromise = ( async () => {
+// 		const container = document.getElementById( 'storeengine-square-card-element' );
+// 		if ( ! container ) return;
+//
+// 		const options = applyFilters( 'storeengine.square.card_options', {
+// 			style: {
+// 				'.input-container':          { borderColor: '#ddd', borderRadius: '4px' },
+// 				'.input-container.is-focus': { borderColor: '#1a56db' },
+// 				'.input-container.is-error': { borderColor: '#dc2626' },
+// 			},
+// 		} );
+//
+// 		if ( ! squareState.card ) {
+// 			squareState.card = await payments.card( options );
+// 		}
+//
+// 		await squareState.card.attach( '#storeengine-square-card-element' );
+// 		doAction( 'storeengine.square.card_mounted', squareState.card );
+// 	} )();
+//
+// 	return mountPromise;
+// }
 
 // ─── Tokenization ─────────────────────────────────────────────────────────────
 
@@ -178,6 +187,47 @@ async function tokenizeCard( card, formData ) {
 
 // ─── registerGateway ─────────────────────────────────────────────────────────
 
+const elements = {}
+let SQUARE_PAYMENT_METHOD = null;
+
+async function createPaymentElement( type ) {
+	const options = applyFilters( 'storeengine.square.card_options', {
+		style: {
+			'.input-container':          { borderColor: '#ddd', borderRadius: '4px' },
+			'.input-container.is-focus': { borderColor: '#1a56db' },
+			'.input-container.is-error': { borderColor: '#dc2626' },
+		},
+	} );
+	const payments = await getOrInitPayments();
+	const element= await payments.card( options );
+
+	elements[ type ] = element;
+
+	return element;
+}
+
+async function mountElement( el ) {
+	const paymentMethodType = el.dataset.paymentMethodType || 'card';
+
+	const element = elements?.card || await createPaymentElement( paymentMethodType );
+
+	element.attach(el);
+
+	doAction( 'storeengine.square.card_mounted', element );
+}
+
+async function maybeMountElement() {
+	const container = StoreEngineDQ( '#storeengine-square-card-element' );
+	if ( ! container.exists() ) {
+		return;
+	}
+
+	container.each( async ( _, el ) => {
+		if ( StoreEngineDQ( el ).children().length ) return;
+		await mountElement( el );
+	} );
+}
+
 export function initSquareGateway() {
 	window.StoreEngineCheckout?.registerGateway( 'square', {
 
@@ -191,8 +241,7 @@ export function initSquareGateway() {
 		async onSelected() {
 			try {
 				clearError();
-				const payments = await getOrInitPayments();
-				await mountCardWidget( payments );
+				await maybeMountElement();
 			} catch ( err ) {
 				renderErrorNotification( err );
 			}
@@ -217,14 +266,14 @@ export function initSquareGateway() {
 			}
 
 			// Path B — new card.
-			if ( ! squareState?.card ) {
+			if ( ! elements?.card ) {
 				throw new Error(
 					__( 'Card widget is not initialized. Please refresh and try again.', 'storeengine-square' )
 				);
 			}
 
 			const formData = window.StoreEngineCheckout.getFormData();
-			const token    = await tokenizeCard( squareState.card, formData );
+			const token    = await tokenizeCard( elements?.card, formData );
 
 			return await makeRequest( checkout_action, { square_payment_token: token } );
 		},
@@ -237,14 +286,11 @@ export function initSquareGateway() {
 
 // ─── Entrypoint ───────────────────────────────────────────────────────────────
 
-let SQUARE_PAYMENTS;
-
 addAction( 'storeengine.add-payment-method.init-form', 'square-on-init-add-payment-method-form', async function() {
 	// const STRIPE_API = getStripeAPI();
 	// await maybeMountPaymentElement( STRIPE_API, 'setup' );
 	clearError();
-	const SQUARE_PAYMENTS = await getOrInitPayments();
-	await mountCardWidget( SQUARE_PAYMENTS );
+	await maybeMountElement();
 } );
 
 addAction( 'storeengine.add-payment-method.select-payment-method', 'square-on-select-payment-method', async function( method ) {
@@ -252,11 +298,10 @@ addAction( 'storeengine.add-payment-method.select-payment-method', 'square-on-se
 		return;
 	}
 	clearError();
-	const SQUARE_PAYMENTS = await getOrInitPayments();
-	await mountCardWidget( SQUARE_PAYMENTS );
+	await maybeMountElement();
 } );
 
-addAction( 'storeengine.add-payment-method.save-payment-method', 'square-on-save-payment-method', async function( method, form ) {
+addAction( 'storeengine.add-payment-method.save-payment-method', 'square-on-save-payment-method', async function( method ) {
 	if ( 'square' !== method || ! squareState || ! squareState.card ) {
 		return;
 	}
@@ -274,8 +319,9 @@ addAction( 'storeengine.add-payment-method.save-payment-method', 'square-on-save
 	if ( response.message ) {
 		await notification( response.message, response.found ? 'info' : 'success', 3500 );
 	}
+
 	await handleRedirectResponse( response, 850 );
-}, 10, 2 );
+} );
 
 document.addEventListener( 'DOMContentLoaded', () => {
 	if ( window.StoreEngineCheckout ) {
