@@ -135,10 +135,11 @@ final class StoreEngineSquarePayments {
 		add_filter( 'storeengine/payment_gateways', [ $this, 'register_gateway' ] );
 
 		// When StoreEngine boots the gateway, wire up supporting services.
+		// Server-side glue — both checkout surfaces hit core's REST controller
+		// (POST /storeengine/v1/checkout/place); per-gateway config + payload
+		// remap is handled inside Hooks via core's filter/action hooks.
 		add_action( 'storeengine/gateway/square/init', static function ( $gateway ) {
 			StoreEngineSquare\Hooks::init( $gateway );
-			StoreEngineSquare\Ajax::init();
-			StoreEngineSquare\Api::init();
 			StoreEngineSquare\Assets::init( $gateway );
 		} );
 	}

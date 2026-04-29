@@ -20,7 +20,16 @@ class Assets {
 			return;
 		}
 
-		if ( ! Helper::is_checkout() && ! Helper::is_add_payment_method_page() ) {
+		// Enqueue on:
+		//   - the legacy /checkout/ page
+		//   - the dashboard "Add a payment method" page
+		//   - the Instant Checkout React iframe (/?se_checkout=1)
+		// The iframe loads same-origin from the store, so it needs the same
+		// gateway scripts — the SDK and adapter wouldn't otherwise be present.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$is_quick_checkout_iframe = ! empty( $_GET['se_checkout'] );
+
+		if ( ! Helper::is_checkout() && ! Helper::is_add_payment_method_page() && ! $is_quick_checkout_iframe ) {
 			return;
 		}
 
@@ -51,8 +60,8 @@ class Assets {
 		//   define( 'SQUARE_ALLOW_HTTP', true );
 		//
 		// This patch is NEVER applied on HTTPS or in production environments.
-		$allow_http = ( defined( 'SQUARE_ALLOW_HTTP' ) && SQUARE_ALLOW_HTTP )
-		              || ( defined( 'WP_DEBUG' ) && WP_DEBUG );
+		$allow_http = ( defined( 'SQUARE_ALLOW_HTTP' ) && \SQUARE_ALLOW_HTTP )
+		              || ( defined( 'WP_DEBUG' ) && \WP_DEBUG );
 
 		if ( ! is_ssl() && $allow_http ) {
 			wp_add_inline_script(
