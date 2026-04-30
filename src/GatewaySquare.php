@@ -61,8 +61,8 @@ class GatewaySquare extends PaymentGateway {
 			'storeengine/square_icon',
 			SE_SQUARE_URL . 'assets/images/squareup.svg'
 		);
-		$this->method_title       = __( 'Square', 'storeengine-square' );
-		$this->method_description = __( 'Accept payments securely via Square Web Payments SDK. Card data never touches your server.', 'storeengine-square' );
+		$this->method_title       = __( 'Square', 'storeengine-square-payments' );
+		$this->method_description = __( 'Accept payments securely via Square Web Payments SDK. Card data never touches your server.', 'storeengine-square-payments' );
 		$this->has_fields         = true;
 		$this->verify_config      = true;
 		$this->supports           = [
@@ -94,21 +94,21 @@ class GatewaySquare extends PaymentGateway {
 	protected function init_admin_fields(): void {
 		$this->admin_fields = [
 			'title'       => [
-				'label'    => __( 'Title', 'storeengine-square' ),
+				'label'    => __( 'Title', 'storeengine-square-payments' ),
 				'type'     => 'safe_text',
-				'tooltip'  => __( 'Payment method title shown to customers at checkout.', 'storeengine-square' ),
-				'default'  => __( 'Credit / Debit Card (Square)', 'storeengine-square' ),
+				'tooltip'  => __( 'Payment method title shown to customers at checkout.', 'storeengine-square-payments' ),
+				'default'  => __( 'Credit / Debit Card (Square)', 'storeengine-square-payments' ),
 				'priority' => 0,
 			],
 			'description' => [
-				'label'    => __( 'Description', 'storeengine-square' ),
+				'label'    => __( 'Description', 'storeengine-square-payments' ),
 				'type'     => 'textarea',
-				'tooltip'  => __( 'Description shown below the payment method title.', 'storeengine-square' ),
+				'tooltip'  => __( 'Description shown below the payment method title.', 'storeengine-square-payments' ),
 				'priority' => 1,
 			],
 			'is_production' => [
-				'label'    => __( 'Live Mode', 'storeengine-square' ),
-				'tooltip'  => __( 'Enable Square production mode. Disable for Sandbox.', 'storeengine-square' ),
+				'label'    => __( 'Live Mode', 'storeengine-square-payments' ),
+				'tooltip'  => __( 'Enable Square production mode. Disable for Sandbox.', 'storeengine-square-payments' ),
 				'type'     => 'checkbox',
 				'default'  => false,
 				'priority' => 2,
@@ -116,25 +116,25 @@ class GatewaySquare extends PaymentGateway {
 
 			// ── Live credentials ──────────────────────────────────────────────
 			'application_id' => [
-				'label'      => __( 'Application ID', 'storeengine-square' ),
+				'label'      => __( 'Application ID', 'storeengine-square-payments' ),
 				'type'       => 'text',
-				'tooltip'    => __( 'From Square Developer Dashboard → Applications → Credentials.', 'storeengine-square' ),
+				'tooltip'    => __( 'From Square Developer Dashboard → Applications → Credentials.', 'storeengine-square-payments' ),
 				'priority'   => 3,
 				'dependency' => [ 'is_production' => true ],
 				'required'   => true,
 			],
 			'access_token'   => [
-				'label'      => __( 'Access Token', 'storeengine-square' ),
+				'label'      => __( 'Access Token', 'storeengine-square-payments' ),
 				'type'       => 'password',
-				'tooltip'    => __( 'Production access token from Square Developer Dashboard.', 'storeengine-square' ),
+				'tooltip'    => __( 'Production access token from Square Developer Dashboard.', 'storeengine-square-payments' ),
 				'priority'   => 4,
 				'dependency' => [ 'is_production' => true ],
 				'required'   => true,
 			],
 			'location_id'    => [
-				'label'      => __( 'Location ID', 'storeengine-square' ),
+				'label'      => __( 'Location ID', 'storeengine-square-payments' ),
 				'type'       => 'text',
-				'tooltip'    => __( 'Square Location payments will be attributed to.', 'storeengine-square' ),
+				'tooltip'    => __( 'Square Location payments will be attributed to.', 'storeengine-square-payments' ),
 				'priority'   => 5,
 				'dependency' => [ 'is_production' => true ],
 				'required'   => true,
@@ -142,21 +142,21 @@ class GatewaySquare extends PaymentGateway {
 
 			// ── Sandbox credentials ───────────────────────────────────────────
 			'sandbox_application_id' => [
-				'label'      => __( 'Sandbox Application ID', 'storeengine-square' ),
+				'label'      => __( 'Sandbox Application ID', 'storeengine-square-payments' ),
 				'type'       => 'text',
 				'priority'   => 3,
 				'dependency' => [ 'is_production' => false ],
 				'required'   => true,
 			],
 			'sandbox_access_token'   => [
-				'label'      => __( 'Sandbox Access Token', 'storeengine-square' ),
+				'label'      => __( 'Sandbox Access Token', 'storeengine-square-payments' ),
 				'type'       => 'password',
 				'priority'   => 4,
 				'dependency' => [ 'is_production' => false ],
 				'required'   => true,
 			],
 			'sandbox_location_id'    => [
-				'label'      => __( 'Sandbox Location ID', 'storeengine-square' ),
+				'label'      => __( 'Sandbox Location ID', 'storeengine-square-payments' ),
 				'type'       => 'text',
 				'priority'   => 5,
 				'dependency' => [ 'is_production' => false ],
@@ -165,10 +165,10 @@ class GatewaySquare extends PaymentGateway {
 
 			// ── Feature flags ─────────────────────────────────────────────────
 			'saved_cards' => [
-				'title'       => __( 'Saved Cards', 'storeengine-square' ),
-				'label'       => __( 'Enable payment via saved cards', 'storeengine-square' ),
+				'title'       => __( 'Saved Cards', 'storeengine-square-payments' ),
+				'label'       => __( 'Enable payment via saved cards', 'storeengine-square-payments' ),
 				'type'        => 'checkbox',
-				'description' => __( 'Allow logged-in customers to save cards via Square card-on-file.', 'storeengine-square' ),
+				'description' => __( 'Allow logged-in customers to save cards via Square card-on-file.', 'storeengine-square-payments' ),
 				'default'     => false,
 				'priority'    => 6,
 			],
@@ -191,7 +191,7 @@ class GatewaySquare extends PaymentGateway {
 
 		if ( ! $app_id ) {
 			throw new StoreEngineException(
-				esc_html__( 'Square Application ID is required.', 'storeengine-square' ),
+				esc_html__( 'Square Application ID is required.', 'storeengine-square-payments' ),
 				'square-application-id-required',
 				null, 400
 			);
@@ -199,7 +199,7 @@ class GatewaySquare extends PaymentGateway {
 
 		if ( ! $token ) {
 			throw new StoreEngineException(
-				esc_html__( 'Square Access Token is required.', 'storeengine-square' ),
+				esc_html__( 'Square Access Token is required.', 'storeengine-square-payments' ),
 				'square-access-token-required',
 				null, 400
 			);
@@ -207,7 +207,7 @@ class GatewaySquare extends PaymentGateway {
 
 		if ( ! $location_id ) {
 			throw new StoreEngineException(
-				esc_html__( 'Square Location ID is required.', 'storeengine-square' ),
+				esc_html__( 'Square Location ID is required.', 'storeengine-square-payments' ),
 				'square-location-id-required',
 				null, 400
 			);
@@ -216,7 +216,7 @@ class GatewaySquare extends PaymentGateway {
 		if ( ! $this->is_currency_supported() ) {
 			throw new StoreEngineException(
 				sprintf(
-					esc_html__( 'Your store currency (%1$s) is not supported by Square. See %2$sSquare supported currencies%3$s.', 'storeengine-square' ),
+					esc_html__( 'Your store currency (%1$s) is not supported by Square. See %2$sSquare supported currencies%3$s.', 'storeengine-square-payments' ),
 					esc_html( Formatting::get_currency() ),
 					'<a href="https://developer.squareup.com/docs/build-basics/working-with-monetary-amounts#countries-and-currencies" target="_blank">',
 					'</a>'
@@ -273,9 +273,9 @@ class GatewaySquare extends PaymentGateway {
 
 		// Add sandbox notice.
 		if ( ! $this->get_option( 'is_production', false ) ) {
-			$description .= PHP_EOL . '<h4>' . esc_html__( 'Sandbox Mode Active', 'storeengine-square' ) . '</h4>';
+			$description .= PHP_EOL . '<h4>' . esc_html__( 'Sandbox Mode Active', 'storeengine-square-payments' ) . '</h4>';
 			$description .= PHP_EOL . '<p>' . sprintf(
-				esc_html__( 'Use test card %1$s, any future expiry, any CVC. See all %2$sSquare test cards%3$s.', 'storeengine-square' ),
+				esc_html__( 'Use test card %1$s, any future expiry, any CVC. See all %2$sSquare test cards%3$s.', 'storeengine-square-payments' ),
 				'<code>4111 1111 1111 1111</code>',
 				'<a href="https://developer.squareup.com/docs/devtools/sandbox/payments#test-payment-values" target="_blank" rel="noopener">',
 				'</a>'
@@ -319,7 +319,7 @@ class GatewaySquare extends PaymentGateway {
 			throw new StoreEngineException(
 				wp_kses_post(
 					sprintf(
-						__( 'The minimum order total to use Square is %s.', 'storeengine-square' ),
+						__( 'The minimum order total to use Square is %s.', 'storeengine-square-payments' ),
 						Formatting::price( $minimum )
 					)
 				),
@@ -375,7 +375,7 @@ class GatewaySquare extends PaymentGateway {
 
 				if ( ! $token instanceof PaymentToken ) {
 					throw new StoreEngineException(
-						esc_html__( 'Saved payment token not found.', 'storeengine-square' ),
+						esc_html__( 'Saved payment token not found.', 'storeengine-square-payments' ),
 						'square-token-not-found',
 						null, 404
 					);
@@ -413,7 +413,7 @@ class GatewaySquare extends PaymentGateway {
 			} else {
 				if ( ! $source_id ) {
 					throw new StoreEngineException(
-						esc_html__( 'Square payment token is missing. Please re-enter your card details.', 'storeengine-square' ),
+						esc_html__( 'Square payment token is missing. Please re-enter your card details.', 'storeengine-square-payments' ),
 						'square-nonce-missing',
 						null, 400
 					);
@@ -451,14 +451,14 @@ class GatewaySquare extends PaymentGateway {
 					OrderStatus::PAYMENT_FAILED,
 					sprintf(
 						/* translators: %s: Square payment status */
-						__( 'Square payment failed. Status: %s', 'storeengine-square' ),
+						__( 'Square payment failed. Status: %s', 'storeengine-square-payments' ),
 						esc_html( $status )
 					)
 				);
 
 				return new WP_Error(
 					'square-payment-not-completed',
-					sprintf( __( 'Payment not completed. Square returned status: %s', 'storeengine-square' ), esc_html( $status ) )
+					sprintf( __( 'Payment not completed. Square returned status: %s', 'storeengine-square-payments' ), esc_html( $status ) )
 				);
 			}
 
@@ -538,7 +538,7 @@ class GatewaySquare extends PaymentGateway {
 			$order_context->proceed_to_next_status( 'process_order', $order, [
 				'note' => sprintf(
 					/* translators: 1: payment ID 2: card brand 3: last 4 digits */
-					__( 'Square charge complete. Payment ID: %1$s. Card: %2$s ending %3$s.', 'storeengine-square' ),
+					__( 'Square charge complete. Payment ID: %1$s. Card: %2$s ending %3$s.', 'storeengine-square-payments' ),
 					$payment_id,
 					$card_brand,
 					$last4
@@ -564,14 +564,14 @@ class GatewaySquare extends PaymentGateway {
 		} catch ( StoreEngineException $e ) {
 			$order->update_status(
 				OrderStatus::PAYMENT_FAILED,
-				sprintf( __( 'Payment failed. Error: %s', 'storeengine-square' ), $e->getMessage() )
+				sprintf( __( 'Payment failed. Error: %s', 'storeengine-square-payments' ), $e->getMessage() )
 			);
 			throw $e;
 
 		} catch ( Throwable $e ) {
 			$order->update_status(
 				OrderStatus::PAYMENT_FAILED,
-				sprintf( __( 'Payment failed. Error: %s', 'storeengine-square' ), $e->getMessage() )
+				sprintf( __( 'Payment failed. Error: %s', 'storeengine-square-payments' ), $e->getMessage() )
 			);
 			throw StoreEngineException::convert_exception( $e, 'square-payment-error' ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped
 		}
@@ -590,7 +590,7 @@ class GatewaySquare extends PaymentGateway {
 		$order = Helper::get_order( $order_id );
 
 		if ( is_wp_error( $order ) || ! $order instanceof Order ) {
-			return new WP_Error( 'invalid-order', __( 'Invalid order.', 'storeengine-square' ) );
+			return new WP_Error( 'invalid-order', __( 'Invalid order.', 'storeengine-square-payments' ) );
 		}
 
 		$amount = abs( (float) ( $amount ?? 0 ) );
@@ -603,7 +603,7 @@ class GatewaySquare extends PaymentGateway {
 		if ( ! $payment_id ) {
 			return new WP_Error(
 				'square-missing-payment-id',
-				__( 'No Square Payment ID found on this order.', 'storeengine-square' )
+				__( 'No Square Payment ID found on this order.', 'storeengine-square-payments' )
 			);
 		}
 
@@ -635,7 +635,7 @@ class GatewaySquare extends PaymentGateway {
 
 			return new WP_Error(
 				'square-refund-error',
-				esc_html( sprintf( __( 'Refund error: %s', 'storeengine-square' ), $e->getMessage() ) )
+				esc_html( sprintf( __( 'Refund error: %s', 'storeengine-square-payments' ), $e->getMessage() ) )
 			);
 		}
 	}
@@ -653,7 +653,7 @@ class GatewaySquare extends PaymentGateway {
 	public function add_payment_method( array $payload ): array {
 		if ( ! is_user_logged_in() ) {
 			throw new StoreEngineException(
-				esc_html__( 'You must be logged in to save a payment method.', 'storeengine-square' ),
+				esc_html__( 'You must be logged in to save a payment method.', 'storeengine-square-payments' ),
 				'square-not-logged-in',
 				null, 401
 			);
@@ -661,7 +661,7 @@ class GatewaySquare extends PaymentGateway {
 
 		if ( empty( $payload['square_payment_token'] ) ) {
 			throw new StoreEngineException(
-				esc_html__( 'Square payment token is missing.', 'storeengine-square' ),
+				esc_html__( 'Square payment token is missing.', 'storeengine-square-payments' ),
 				'square-nonce-missing',
 				null, 400
 			);
@@ -684,7 +684,7 @@ class GatewaySquare extends PaymentGateway {
 
 		if ( ! $card->getId() ) {
 			throw new StoreEngineException(
-				esc_html__( 'Failed to save card with Square.', 'storeengine-square' ),
+				esc_html__( 'Failed to save card with Square.', 'storeengine-square-payments' ),
 				'square-card-save-failed'
 			);
 		}
@@ -718,8 +718,8 @@ class GatewaySquare extends PaymentGateway {
 			'redirect' => Helper::get_account_endpoint_url( 'payment-methods' ),
 			'found'    => $found,
 			'message'  => $found
-				? __( 'Duplicate payment method — updated.', 'storeengine-square' )
-				: __( 'Payment method saved successfully.', 'storeengine-square' ),
+				? __( 'Duplicate payment method — updated.', 'storeengine-square-payments' )
+				: __( 'Payment method saved successfully.', 'storeengine-square-payments' ),
 			'token'    => $token->get_id(),
 			'last4'    => $token->get_last4(),
 			'expire'   => [
@@ -856,7 +856,7 @@ class GatewaySquare extends PaymentGateway {
 				$order_context->proceed_to_next_status(
 					Completed::STATUS,
 					$renewal_order,
-					_x( 'Payment not needed.', 'Square scheduled payment', 'storeengine-square' )
+					_x( 'Payment not needed.', 'Square scheduled payment', 'storeengine-square-payments' )
 				);
 				$renewal_order->save();
 
@@ -880,7 +880,7 @@ class GatewaySquare extends PaymentGateway {
 
 			if ( ! $customer_id || ! $card_id ) {
 				throw new StoreEngineException(
-					esc_html__( 'Square renewal failed: no saved payment method found for this subscription. The customer needs to update their payment method.', 'storeengine-square' ),
+					esc_html__( 'Square renewal failed: no saved payment method found for this subscription. The customer needs to update their payment method.', 'storeengine-square-payments' ),
 					'square-renewal-no-saved-card',
 					[
 						'renewal_order_id' => $renewal_order->get_id(),
@@ -910,7 +910,7 @@ class GatewaySquare extends PaymentGateway {
 				throw new StoreEngineException(
 					sprintf(
 						/* translators: %s: Square payment status */
-						esc_html__( 'Square renewal charge returned unexpected status: %s', 'storeengine-square' ),
+						esc_html__( 'Square renewal charge returned unexpected status: %s', 'storeengine-square-payments' ),
 						esc_html( $status )
 					),
 					'square-renewal-unexpected-status',
@@ -947,7 +947,7 @@ class GatewaySquare extends PaymentGateway {
             $order_context->proceed_to_next_status( 'process_order', $renewal_order, [
                     'note'           => sprintf(
                     // translators: %s. Square PaymentId.
-                            __( 'Square payment complete (Payment ID: %s).', 'storeengine-square' ),
+                            __( 'Square payment complete (Payment ID: %s).', 'storeengine-square-payments' ),
                             $payment_id
                     ),
                     'transaction_id' => $payment_id,
@@ -959,7 +959,7 @@ class GatewaySquare extends PaymentGateway {
 				[
 					'note' => sprintf(
 						/* translators: 1: payment ID 2: card brand 3: last 4 digits */
-						__( 'Square renewal payment complete. Payment ID: %1$s. Card: %2$s ending %3$s.', 'storeengine-square' ),
+						__( 'Square renewal payment complete. Payment ID: %1$s. Card: %2$s ending %3$s.', 'storeengine-square-payments' ),
 						$payment_id,
 						$card_brand,
 						$last4
@@ -985,7 +985,7 @@ class GatewaySquare extends PaymentGateway {
 				OrderStatus::PAYMENT_FAILED,
 				sprintf(
 					/* translators: %s: error message */
-					__( 'Square renewal payment failed. Error: %s', 'storeengine-square' ),
+					__( 'Square renewal payment failed. Error: %s', 'storeengine-square-payments' ),
 					$e->getMessage()
 				)
 			);
@@ -1001,7 +1001,7 @@ class GatewaySquare extends PaymentGateway {
 				OrderStatus::PAYMENT_FAILED,
 				sprintf(
 					/* translators: %s: error message */
-					__( 'Square renewal payment failed. Error: %s', 'storeengine-square' ),
+					__( 'Square renewal payment failed. Error: %s', 'storeengine-square-payments' ),
 					$e->getMessage()
 				)
 			);

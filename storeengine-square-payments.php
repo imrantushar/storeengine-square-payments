@@ -8,7 +8,7 @@
  * Author URI:      https://kodezen.com
  * License:         GPL-3.0+
  * License URI:     http://www.gnu.org/licenses/gpl-3.0.txt
- * Text Domain:     storeengine-square
+ * Text Domain:     storeengine-square-payments
  * Domain Path:     /languages/
  *
  * Requires PHP:          7.4
@@ -34,7 +34,7 @@ add_action( 'plugins_loaded', static function () {
 					echo wp_kses_post(
 						sprintf(
 						/* translators: %s: StoreEngine plugin link */
-							__( '<strong>StoreEngine Square</strong> requires %s to be installed and active.', 'storeengine-square' ),
+							__( '<strong>StoreEngine Square</strong> requires %s to be installed and active.', 'storeengine-square-payments' ),
 							'<a href="https://storeengine.pro" target="_blank">StoreEngine</a>'
 						)
 					);
@@ -110,7 +110,7 @@ final class StoreEngineSquarePayments {
 						echo wp_kses_post(
 							sprintf(
 							/* translators: %s: shell command */
-								__( '<strong>StoreEngine Square:</strong> Composer dependencies are missing. Run %s inside the plugin directory and re-activate.', 'storeengine-square' ),
+								__( '<strong>StoreEngine Square:</strong> Composer dependencies are missing. Run %s inside the plugin directory and re-activate.', 'storeengine-square-payments' ),
 								'<code>composer install --no-dev -o</code>'
 							)
 						);
@@ -151,7 +151,7 @@ final class StoreEngineSquarePayments {
 
 	public function load_textdomain(): void {
 		load_plugin_textdomain(
-			'storeengine-square',
+			'storeengine-square-payments',
 			false,
 			dirname( plugin_basename( SE_SQUARE_FILE ) ) . '/languages/'
 		);

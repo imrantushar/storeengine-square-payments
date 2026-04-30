@@ -50,7 +50,6 @@ use StoreEngine\Classes\Order;
 use StoreEngine\Payment_Gateways;
 use StoreEngine\Utils\Formatting;
 use StoreEngine\Utils\Helper;
-use StoreEngineSquare\GatewaySquare;
 use WP_Error;
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -202,7 +201,7 @@ final class SquareService {
 		$request->setBillingAddress( $this->build_address( $order ) );
 		$request->setNote( sprintf(
 			/* translators: 1: site name 2: order ID */
-			__( 'Payment for %1$s – Order #%2$s', 'storeengine-square' ),
+			__( 'Payment for %1$s – Order #%2$s', 'storeengine-square-payments' ),
 			get_bloginfo( 'name' ),
 			$order->get_id()
 		) );
@@ -564,7 +563,7 @@ final class SquareService {
 	private function assert_client(): void {
 		if ( ! $this->client instanceof SquareClient ) {
 			throw new StoreEngineException(
-				esc_html__( 'Square is not configured. Please enter your credentials in StoreEngine → Payments → Square.', 'storeengine-square' ),
+				esc_html__( 'Square is not configured. Please enter your credentials in StoreEngine → Payments → Square.', 'storeengine-square-payments' ),
 				'square-client-not-initialised',
 				null,
 				503
