@@ -84,9 +84,7 @@ function clearError() {
  * and lets PHP handle it via get_selected_token_from_request() (Path A).
  */
 function getSelectedSavedToken() {
-	const radio = document.querySelector(
-		'input[name="storeengine-square-payment-token"]:checked'
-	);
+	const radio = document.querySelector( 'input[name="storeengine-square-payment-token"]:checked' );
 	if ( ! radio || radio.value === 'new' || ! radio.value ) {
 		return null;
 	}
@@ -101,30 +99,34 @@ function getSelectedSavedToken() {
  */
 const getConfig = () => getSeGlobal( 'payment_gateways.square', {application_id: null, is_sandbox: false, location_id: null} );
 
+/**
+ *
+ * @returns {Promise<Payments>}
+ */
 async function getOrInitPayments() {
 	if ( SQUARE_API ) return SQUARE_API;
 
 	if ( ! window.Square ) {
-		throw new Error( __( 'Square Web Payments SDK is not loaded.', 'storeengine-square' ) );
+		throw new Error( __( 'Square Web Payments SDK is not loaded.', 'storeengine-square-payments' ) );
 	}
 
-	const config = getConfig();
+	const {application_id, is_sandbox, location_id} = getConfig();
 
-	if ( ! config.application_id || ! config.location_id ) {
-		throw new Error( __( 'Square is not configured. Please contact the site administrator.', 'storeengine-square' ) );
+	if ( ! application_id || ! location_id ) {
+		throw new Error( __( 'Square is not configured. Please contact the site administrator.', 'storeengine-square-payments' ) );
 	}
 
-	const appIdIsSandbox = config.application_id.startsWith( 'sandbox-' );
+	const appIdIsSandbox = application_id.startsWith( 'sandbox-' );
 
-	if ( config.is_sandbox && ! appIdIsSandbox ) {
-		throw new Error( __( 'Square configuration error: invalid “Application ID”.', 'storeengine-square' ) );
+	if ( is_sandbox && ! appIdIsSandbox ) {
+		throw new Error( __( 'Square configuration error: invalid “Application ID”.', 'storeengine-square-payments' ) );
 	}
 
-	if ( ! config.is_sandbox && appIdIsSandbox ) {
-		throw new Error( __( 'Square configuration error: invalid “Application ID”.', 'storeengine-square' ) );
+	if ( ! is_sandbox && appIdIsSandbox ) {
+		throw new Error( __( 'Square configuration error: invalid “Application ID”.', 'storeengine-square-payments' ) );
 	}
 
-	SQUARE_API = window.Square.payments( config.application_id, config.location_id );
+	SQUARE_API = window.Square.payments( application_id, location_id );
 
 	return SQUARE_API;
 }
@@ -139,7 +141,7 @@ async function getOrInitPayments() {
  * StoreEngine's tokenization UI controls visibility of the form container —
  * we do not touch display/visibility here.
  *
- * @param {any} payments  Square Payments instance.
+ * @param {Payments} payments  Square Payments instance.
  * @return {Promise<void>}
  */
 // function mountCardWidget( payments ) {
@@ -170,13 +172,19 @@ async function getOrInitPayments() {
 
 // ─── Tokenization ─────────────────────────────────────────────────────────────
 
+/**
+ *
+ * @param card
+ * @param formData
+ * @returns {Promise<*>}
+ */
 async function tokenizeCard( card, formData ) {
 	const result = await card.tokenize();
 
 	if ( result.status !== 'OK' ) {
 		const errors  = result.errors ?? [];
 		const message = errors.map( ( e ) => e.message ).join( ' ' ) ||
-			__( 'Card tokenization failed. Please check your card details.', 'storeengine-square' );
+			__( 'Card tokenization failed. Please check your card details.', 'storeengine-square-payments' );
 		throw new Error( message );
 	}
 
@@ -187,9 +195,18 @@ async function tokenizeCard( card, formData ) {
 
 // ─── registerGateway ─────────────────────────────────────────────────────────
 
+/**
+ *
+ * @type {{[key:string]:Card}}
+ */
 const elements = {}
 let SQUARE_PAYMENT_METHOD = null;
 
+/**
+ *
+ * @param type
+ * @returns {Promise<Card>}
+ */
 async function createPaymentElement( type ) {
 	const options = applyFilters( 'storeengine.square.card_options', {
 		style: {
@@ -211,7 +228,7 @@ async function mountElement( el ) {
 
 	const element = elements?.card || await createPaymentElement( paymentMethodType );
 
-	element.attach(el);
+	await element.attach( el );
 
 	doAction( 'storeengine.square.card_mounted', element );
 }
@@ -268,7 +285,7 @@ export function initSquareGateway() {
 			// Path B — new card.
 			if ( ! elements?.card ) {
 				throw new Error(
-					__( 'Card widget is not initialized. Please refresh and try again.', 'storeengine-square' )
+					__( 'Card widget is not initialized. Please refresh and try again.', 'storeengine-square-payments' )
 				);
 			}
 
@@ -287,8 +304,6 @@ export function initSquareGateway() {
 // ─── Entrypoint ───────────────────────────────────────────────────────────────
 
 addAction( 'storeengine.add-payment-method.init-form', 'square-on-init-add-payment-method-form', async function() {
-	// const STRIPE_API = getStripeAPI();
-	// await maybeMountPaymentElement( STRIPE_API, 'setup' );
 	clearError();
 	await maybeMountElement();
 } );
@@ -297,6 +312,7 @@ addAction( 'storeengine.add-payment-method.select-payment-method', 'square-on-se
 	if ( 'square' !== method ) {
 		return;
 	}
+
 	clearError();
 	await maybeMountElement();
 } );
@@ -310,15 +326,13 @@ addAction( 'storeengine.add-payment-method.save-payment-method', 'square-on-save
 
 	if ( result.status !== 'OK' ) {
 		const errors  = result.errors ?? [];
-		const message = errors.map( ( e ) => e.message ).join( ' ' ) || __( 'Card tokenization failed. Please check your card details.', 'storeengine-square' );
+		const message = errors.map( ( e ) => e.message ).join( ' ' ) || __( 'Card tokenization failed. Please check your card details.', 'storeengine-square-payments' );
 		throw new Error( message );
 	}
 
-	const response = await makeRequest2( 'payment_method/square/save-card', {square_payment_token: result.token} );
+	const response = await makeRequest2( 'payment_method/add', {payment_method: 'square', square_payment_token: result.token} );
 
-	if ( response.message ) {
-		await notification( response.message, response.found ? 'info' : 'success', 3500 );
-	}
+	await notification( response.message, response.found ? 'info' : 'success', 3500 );
 
 	await handleRedirectResponse( response, 850 );
 } );
